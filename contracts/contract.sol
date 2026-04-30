@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/dev/v1_0_0/FunctionsClient.sol";
-import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
+import {ReentrancyGuard} from "../lib/openzepplin/ReentrancyGuard.sol";
+import {Ownable} from "../lib/openzepplin//Ownable.sol";
+import {Strings} from "../lib/openzepplin/Strings.sol";
+import {SafeERC20} from "../lib/openzepplin/SafeERC20.sol";
+import {IERC20} from "../lib/openzepplin/IERC20.sol";
+import {Context} from "../lib/openzepplin/Context.sol";
+import {ConfirmedOwner} from "../lib/chainlink/ConfirmedOwner.sol";
+import {FunctionsClient} from "../lib/chainlink/FunctionsClient.sol";
+import {IFunctionsRouter} from "../lib/interfaces/IFunctionsRouter.sol";
+
 
 contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     using SafeERC20 for IERC20;
@@ -32,8 +37,8 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
 
     // Chainlink Functions configuration
     bytes32 public donId;
-    string public chainlinkFunctionsRouter;
-    string public chainlinkFunctionsSubscriptionId;
+    address public chainlinkFunctionsRouter;
+    uint32 public chainlinkFunctionsSubscriptionId;
     string public verificationOracleUrl;
 
     event RequestCreated(
@@ -52,11 +57,11 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     constructor(
         address _functionsRouter,
         bytes32 _donId,
-        uint64 _subscriptionId
-    ) FunctionsClient(_functionsRouter) {
+        uint32 _subscriptionId
+    ) Ownable(msg.sender) FunctionsClient(_functionsRouter) {
         chainlinkFunctionsRouter = _functionsRouter;
         donId = _donId;
-        chainlinkFunctionsSubscriptionId = _subscriptionId.toString();
+        chainlinkFunctionsSubscriptionId = _subscriptionId;
     }
 
     function createRequest(
@@ -101,50 +106,62 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         emit ScanSubmitted(requestId, msg.sender, scanDataUri);
     }
 
+    function scanTypeToString(ScanType scanType) internal pure returns (string memory) {
+    if (scanType == ScanType.PHOTO_360) return "PHOTO_360";
+    if (scanType == ScanType.LIDAR) return "LIDAR";
+    if (scanType == ScanType.STANDARD_PHOTO) return "STANDARD_PHOTO";
+    if (scanType == ScanType.DRONE_SCAN) return "DRONE_SCAN";
+    if (scanType == ScanType.VIDEO_CAPTURE) return "VIDEO_CAPTURE";
+    revert("Unknown scan type");
+}
+
     function requestVerification(uint256 requestId) external nonReentrant {
-        ScanRequest storage req = requests[requestId];
-        require(req.fulfilled, "Scan not submitted");
-        require(req.verificationStatus == VerificationStatus.Pending, "Already verified");
+    ScanRequest storage req = requests[requestId];
+    require(req.fulfilled, "Scan not submitted");
+    require(req.verificationStatus == VerificationStatus.Pending, "Already verified");
 
-        // Prepare the Chainlink Functions request
-        string[] memory args = new string[](3);
-        args[0] = req.scanDataUri;
-        args[1] = req.location;
-        args[2] = req.scanType.toString();
+    // Prepare the Chainlink Functions request
+    string[] memory args = new string[](3);
+    args[0] = req.scanDataUri;
+    args[1] = req.location;
+    args[2] = scanTypeToString(req.scanType);
 
-        string[] memory sources = new string[](1);
-        sources[0] = verificationOracleUrl;
+    string[] memory sources = new string[](1);
+    sources[0] = verificationOracleUrl;
 
-        bytes memory requestBytes = abi.encodePacked(args, sources);
+    bytes memory requestBytes = abi.encode(args, sources);
 
-        // Send the request to Chainlink Functions
-        bytes32 requestIdBytes32 = sendRequest(
-            requestBytes,
-            donId,
-            chainlinkFunctionsSubscriptionId,
-            300000, // Gas limit
-            0.1 ether // LINK amount
-        );
+    // Send the request to Chainlink Functions
+    bytes32 requestIdBytes32 = _sendRequest(
+    requestBytes,
+    uint64(uint256(donId)),
+    chainlinkFunctionsSubscriptionId,
+    bytes32(uint256(300000)) // Gas limit
+);
 
-        req.verificationRequestId = requestIdBytes32;
-        req.verificationStatus = VerificationStatus.Pending;
-        emit VerificationRequested(requestId, requestIdBytes32);
+    req.verificationRequestId = requestIdBytes32;
+    req.verificationStatus = VerificationStatus.Pending;
+    emit VerificationRequested(requestId, requestIdBytes32);
+}
+
+    function _fulfillRequest(bytes32 requestId,bytes memory response,bytes memory err)
+    internal override {
+    if (err.length > 0) {
+        revert(string(err));
     }
 
-    function fulfillRequest(bytes32 requestId, bytes memory response)
-        internal
-        override
-        onlyOwner
-    {
-        (uint256 requestIdUint, bool approved) = abi.decode(response, (uint256, bool));
+    // Decode the response
+    (uint256 requestIdUint, bool approved) = abi.decode(response, (uint256, bool));
 
-        ScanRequest storage req = requests[requestIdUint];
-        require(req.verificationRequestId == requestId, "Invalid request ID");
-        require(req.verificationStatus == VerificationStatus.Pending, "Already verified");
+    // Retrieve the request
+    ScanRequest storage req = requests[requestIdUint];
+    require(req.verificationRequestId == requestId, "Invalid request ID");
+    require(req.verificationStatus == VerificationStatus.Pending, "Already verified");
 
-        req.verificationStatus = approved ? VerificationStatus.Approved : VerificationStatus.Rejected;
-        emit ScanVerified(requestIdUint, req.scanner, approved);
-    }
+    // Update the verification status
+    req.verificationStatus = approved ? VerificationStatus.Approved : VerificationStatus.Rejected;
+    emit ScanVerified(requestIdUint, req.scanner, approved);
+}
 
     function withdrawScannerPayment(uint256 requestId) external nonReentrant {
         ScanRequest storage req = requests[requestId];
@@ -152,7 +169,8 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         require(req.verificationStatus == VerificationStatus.Approved, "Not approved");
 
         uint256 scannerPayment = (req.payment * PLATFORM_FEE_PERCENT) / 100;
-        payable(req.scanner).transfer(scannerPayment);
+        (bool success, ) = req.scanner.call{value: scannerPayment}("");
+        require(success, "Transfer failed");
         emit FundsWithdrawn(requestId, req.scanner, scannerPayment);
     }
 
@@ -162,10 +180,12 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
 
         if (req.verificationStatus == VerificationStatus.Approved) {
             uint256 requestorRefund = req.payment - ((req.payment * PLATFORM_FEE_PERCENT) / 100);
-            payable(req.requestor).transfer(requestorRefund);
+            (bool success, ) = req.scanner.call{value: requestorRefund}("");
+            require(success, "Transfer failed");
             emit FundsWithdrawn(requestId, req.requestor, requestorRefund);
         } else if (req.verificationStatus == VerificationStatus.Rejected) {
-            payable(req.requestor).transfer(req.payment);
+            (bool success, ) = req.scanner.call{value: req.payment}("");
+            require(success, "Transfer failed");
             emit FundsWithdrawn(requestId, req.requestor, req.payment);
         } else {
             revert("Verification still pending");
