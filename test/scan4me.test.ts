@@ -3,18 +3,23 @@ import type { Address } from "viem";
 import { foundry } from "viem/chains";
 import { deployContract } from "viem/actions";
 import artifact from "../artifacts/contracts/scan4me.sol/Scan4MeMarketplace.json";
+import { describe, it, beforeEach } from "node:test";
 import { expect } from "chai";
 import * as chai from "chai";
 import chaiAsPromised from "chai-as-promised";
+import { privateKeyToAccount } from "viem/accounts";
 chai.use(chaiAsPromised);
 
 //Use a test private key (DO NOT use real keys in production)
 //Using Account#10 for Creator
 const CREATOR_KEY = "0xf214f2b2cd398c806f84e317254e0f0b801d0643303237d97a22a48e01628897"; // Replace with a test key
+const creatorAccount=privateKeyToAccount(CREATOR_KEY);
 //Using Account#17 for Acceptor
-const ACCEPTOR_KEY="0x689af8efa8c651a91ad287602527f3af2fe9f6501a7ac4b061667b5a93e037fd"
+const SCANNER_KEY="0x689af8efa8c651a91ad287602527f3af2fe9f6501a7ac4b061667b5a93e037fd"
+const scannerAccount=privateKeyToAccount(SCANNER_KEY);
 //Using Account#7 for Random account
 const RANDO_KEY= "0x4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356"
+const randoAccount=privateKeyToAccount(RANDO_KEY);
 
 //Fix to retrieve from counter or something for deployment
 const REQUEST_ID=0;
@@ -45,17 +50,17 @@ const client = createPublicClient({
 const creatorWalletClient = createWalletClient({
   chain: foundry,
   transport: http(),
-  account: CREATOR_KEY,
+  account: creatorAccount,
 });
 const acceptorWalletClient = createWalletClient({
   chain: foundry,
   transport: http(),
-  account: ACCEPTOR_KEY,
+  account: scannerAccount,
 });
 const randoWalletClient = createWalletClient({
   chain: foundry,
   transport: http(),
-  account: RANDO_KEY,
+  account: randoAccount,
 });
 
 describe("Scan4MeMarketplace", function () {
@@ -66,11 +71,14 @@ describe("Scan4MeMarketplace", function () {
       abi,
       bytecode: bytecode as `0x${string}`,
       args: [/* constructor args if any */],
-      account: CREATOR_KEY,
+      account: creatorAccount,
     });
     expect(contractAddress).to.match(/^0x[a-fA-F0-9]{40}$/);
   });
 
+
+  //Create Request Test
+  //=================================================================================================================//
   describe("createRequest", function () {
     it("should create a new request and emit an event", async function () {
       // Call the function
@@ -79,7 +87,6 @@ describe("Scan4MeMarketplace", function () {
         abi,
         functionName: "createRequest",
         args: ["test data", 123], // Replace with actual args
-        account: CREATOR_KEY,
       });
 
       // Optionally, check the state
@@ -101,7 +108,6 @@ describe("Scan4MeMarketplace", function () {
           abi,
           functionName: "createRequest",
           args: ["", 0],
-          account: CREATOR_KEY,
         });
       } catch (err) {
         errorCaught = true;
@@ -110,6 +116,10 @@ describe("Scan4MeMarketplace", function () {
       expect(errorCaught).to.be.true;
     });
   });
+
+
+  //Accept Request Test
+  //=================================================================================================================//
   describe("acceptRequest", function () {
   beforeEach(async function () {
     //Creator creates the request
@@ -118,7 +128,6 @@ describe("Scan4MeMarketplace", function () {
       abi,
       functionName: "createRequest",
       args: ["test data", 123],
-      account: CREATOR_KEY,
     });
   });
     it("should allow acceptor to accept request", async function () {
@@ -128,7 +137,6 @@ describe("Scan4MeMarketplace", function () {
         abi,
         functionName: "acceptRequest",
         args:[REQUEST_ID],
-        account: ACCEPTOR_KEY,
       });
       //Check to ensure the request is now locked
       const request=await client.readContract({
@@ -146,7 +154,7 @@ describe("Scan4MeMarketplace", function () {
         abi,
         functionName: "acceptRequest",
         args:[REQUEST_ID],
-        account: ACCEPTOR_KEY,
+        account: scannerAccount,
       });
       //Try and accept with a different user
       let errorCaught=false;
@@ -156,7 +164,6 @@ describe("Scan4MeMarketplace", function () {
           abi,
           functionName: "acceptRequest",
           args:[REQUEST_ID],
-          account: RANDO_KEY,
         });
       }
       catch (err){
@@ -165,6 +172,9 @@ describe("Scan4MeMarketplace", function () {
       expect(errorCaught).to.be.true;
     })
   })
+
+  //Submit Scan Test
+  //=================================================================================================================//
   describe("submitScan", function () {
     let requestID: number;
     requestID=REQUEST_ID;
@@ -175,7 +185,6 @@ describe("Scan4MeMarketplace", function () {
         abi,
         functionName: "createRequest",
         args: ["test data", 123, 1],
-        account: CREATOR_KEY,
       });
       //Acceptor accepts request
       await acceptorWalletClient.writeContract({
@@ -183,7 +192,6 @@ describe("Scan4MeMarketplace", function () {
         abi,
         functionName: "acceptRequest",
         args: [requestID],
-        account: ACCEPTOR_KEY,
       });
     });
     it("should fulfill the request after one submission if only one is required", async function () {
@@ -193,7 +201,6 @@ describe("Scan4MeMarketplace", function () {
         abi,
         functionName: "createRequest",
         args: ["location1", 0, 100, 1], // last arg: requiredSubmissions = 1
-        account: CREATOR_KEY,
       });
       // Accept the request
       await acceptorWalletClient.writeContract({
@@ -201,7 +208,6 @@ describe("Scan4MeMarketplace", function () {
         abi,
         functionName: "acceptRequest",
         args: [0],
-        account: ACCEPTOR_KEY,
       });
       // Submit scan
       await acceptorWalletClient.writeContract({
@@ -209,7 +215,6 @@ describe("Scan4MeMarketplace", function () {
         abi,
         functionName: "submitScan",
         args: [0, "ipfs://scan-data-1"],
-        account: ACCEPTOR_KEY,
       });
       // Check fulfilled
       const request = await client.readContract({
@@ -230,7 +235,6 @@ describe("Scan4MeMarketplace", function () {
     abi,
     functionName: "createRequest",
     args: ["location2", 0, 100, 3], // last arg: requiredSubmissions = 3
-    account: CREATOR_KEY,
   });
   // Accept the request
   await acceptorWalletClient.writeContract({
@@ -238,7 +242,6 @@ describe("Scan4MeMarketplace", function () {
     abi,
     functionName: "acceptRequest",
     args: [1],
-    account: ACCEPTOR_KEY,
   });
   // Submit first scan
   await acceptorWalletClient.writeContract({
@@ -246,7 +249,6 @@ describe("Scan4MeMarketplace", function () {
     abi,
     functionName: "submitScan",
     args: [1, "ipfs://scan-data-1"],
-    account: ACCEPTOR_KEY,
   });
   // Check not fulfilled yet
   let request = await client.readContract({
@@ -265,7 +267,6 @@ describe("Scan4MeMarketplace", function () {
     abi,
     functionName: "submitScan",
     args: [1, "ipfs://scan-data-2"],
-    account: ACCEPTOR_KEY,
   });
   // Submit third scan
   await acceptorWalletClient.writeContract({
@@ -273,7 +274,6 @@ describe("Scan4MeMarketplace", function () {
     abi,
     functionName: "submitScan",
     args: [1, "ipfs://scan-data-3"],
-    account: ACCEPTOR_KEY,
   });
   // Now it should be fulfilled
   request = await client.readContract({
@@ -294,7 +294,6 @@ describe("Scan4MeMarketplace", function () {
         abi,
         functionName: "submitScan",
         args: [REQUEST_ID, "ipfs://bad"],
-        account: CREATOR_KEY,
       });
     }
     catch (err) {
@@ -302,4 +301,8 @@ describe("Scan4MeMarketplace", function () {
     }
     expect(errorCaught).to.be.true;
   })
+
+  //Request Verification Test
+  //=================================================================================================================//
+  
 })
