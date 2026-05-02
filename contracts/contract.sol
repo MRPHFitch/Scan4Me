@@ -11,6 +11,7 @@ import {ConfirmedOwner} from "../lib/chainlink/ConfirmedOwner.sol";
 import {FunctionsClient} from "../lib/chainlink/FunctionsClient.sol";
 import {IFunctionsRouter} from "../lib/interfaces/IFunctionsRouter.sol";
 
+//TODO: Min_Payment, Platform_Fee_Percent, Multi scan per request 
 
 contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     using SafeERC20 for IERC20;
@@ -33,7 +34,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     mapping(uint256 => ScanRequest) public requests;
     uint256 public nextRequestId;
     uint256 public constant MIN_PAYMENT = 0.01 ether; //Check to possible adjust for fair payment
-    uint256 public constant PLATFORM_FEE_PERCENT = 1; // 1%
+    uint256 public constant PLATFORM_FEE_PERCENT = 1; // 1% Not sure about this. Double check it
 
     // Chainlink Functions configuration
     bytes32 public donId;
@@ -86,10 +87,12 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         emit RequestCreated(nextRequestId, msg.sender, location, scanType, msg.value);
         nextRequestId++;
     }
-
+    //Work on allowing multiple people to accept a request, if they don't possess equipment
+    //If they want a photo and a drone scan, one can accept the photo, another can accept the drone
+    //Easiest would just be for only one scan type per request. Maybe see about allowing multiple scans per request.
     function acceptRequest(uint256 requestId) external nonReentrant {
         ScanRequest storage req = requests[requestId];
-        require(req.scanner == address(0), "Already accepted");
+        require(req.scanner == address(0), "Already accepted");  
         require(msg.sender != req.requestor, "Requestor cannot be scanner");
         req.scanner = msg.sender;
         emit ScanAccepted(requestId, msg.sender);
