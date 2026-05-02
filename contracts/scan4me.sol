@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {ReentrancyGuard} from "../lib/openzepplin/ReentrancyGuard.sol";
-import {Ownable} from "../lib/openzepplin//Ownable.sol";
-import {Strings} from "../lib/openzepplin/Strings.sol";
-import {SafeERC20} from "../lib/openzepplin/SafeERC20.sol";
-import {IERC20} from "../lib/openzepplin/IERC20.sol";
-import {Context} from "../lib/openzepplin/Context.sol";
-import {ConfirmedOwner} from "../lib/chainlink/ConfirmedOwner.sol";
-import {FunctionsClient} from "../lib/chainlink/FunctionsClient.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Context} from "@openzeppelin/contracts/utils/Context.sol";
+import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
+import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/dev/v1_X/FunctionsClient.sol";
 import {IFunctionsRouter} from "../lib/interfaces/IFunctionsRouter.sol";
 
-//TODO: Min_Payment, Platform_Fee_Percent, Multi scan per request 
+//TODO: Min_Payment, Multi scan per request 
 
 contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     using SafeERC20 for IERC20;
@@ -34,7 +34,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     mapping(uint256 => ScanRequest) public requests;
     uint256 public nextRequestId;
     uint256 public constant MIN_PAYMENT = 0.01 ether; //Check to possible adjust for fair payment
-    uint256 public constant PLATFORM_FEE_PERCENT = 1; // 1% Not sure about this. Double check it
+    uint256 public constant SCANNER_PAYMENT = 1; // 1% Not sure about this. Double check it
 
     // Chainlink Functions configuration
     bytes32 public donId;
@@ -94,6 +94,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         ScanRequest storage req = requests[requestId];
         require(req.scanner == address(0), "Already accepted");  
         require(msg.sender != req.requestor, "Requestor cannot be scanner");
+        require(!req.fulfilled, "Already fulfilled");
         req.scanner = msg.sender;
         emit ScanAccepted(requestId, msg.sender);
     }
@@ -171,7 +172,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         require(msg.sender == req.scanner, "Only scanner can withdraw");
         require(req.verificationStatus == VerificationStatus.Approved, "Not approved");
 
-        uint256 scannerPayment = (req.payment * PLATFORM_FEE_PERCENT) / 100;
+        uint256 scannerPayment = (req.payment * SCANNER_PAYMENT) / 100;
         (bool success, ) = req.scanner.call{value: scannerPayment}("");
         require(success, "Transfer failed");
         emit FundsWithdrawn(requestId, req.scanner, scannerPayment);
@@ -182,12 +183,12 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         require(msg.sender == req.requestor, "Only requestor can withdraw");
 
         if (req.verificationStatus == VerificationStatus.Approved) {
-            uint256 requestorRefund = req.payment - ((req.payment * PLATFORM_FEE_PERCENT) / 100);
-            (bool success, ) = req.scanner.call{value: requestorRefund}("");
+            uint256 requestorRefund = req.payment - ((req.payment * SCANNER_PAYMENT) / 100);
+            (bool success, ) = req.requestor.call{value: requestorRefund}("");
             require(success, "Transfer failed");
             emit FundsWithdrawn(requestId, req.requestor, requestorRefund);
         } else if (req.verificationStatus == VerificationStatus.Rejected) {
-            (bool success, ) = req.scanner.call{value: req.payment}("");
+            (bool success, ) = req.requestor.call{value: req.payment}("");
             require(success, "Transfer failed");
             emit FundsWithdrawn(requestId, req.requestor, req.payment);
         } else {
