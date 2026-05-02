@@ -11,5 +11,10 @@
     "moduleResolution": "node16",
     "outDir": "dist",
     "types": ["node", "mocha"]
-  }
+  },
+  "include": [
+    "scripts",
+    "test",
+    "types",
+  ]
 }

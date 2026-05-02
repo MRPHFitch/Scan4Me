@@ -26,8 +26,11 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         uint256 payment;
         address scanner;
         bool fulfilled;
+        bool accepted;
         VerificationStatus verificationStatus;
         string scanDataUri;
+        uint256 requiredScans;
+        uint256 submissions;
         bytes32 verificationRequestId;
     }
 
@@ -64,6 +67,9 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         donId = _donId;
         chainlinkFunctionsSubscriptionId = _subscriptionId;
     }
+    function getRequest(uint256 requestID) public view returns(ScanRequest memory){
+        return requests[requestID];
+    }
 
     function createRequest(
         string memory location,
@@ -79,8 +85,11 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
             payment: msg.value,
             scanner: address(0),
             fulfilled: false,
+            accepted: false,
             verificationStatus: VerificationStatus.Pending,
             scanDataUri: "",
+            requiredScans: msg.value,
+            submissions: 0,
             verificationRequestId: ""
         });
 
@@ -95,6 +104,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         require(req.scanner == address(0), "Already accepted");  
         require(msg.sender != req.requestor, "Requestor cannot be scanner");
         require(!req.fulfilled, "Already fulfilled");
+        require(!req.accepted, "Request already accepted");
         req.scanner = msg.sender;
         emit ScanAccepted(requestId, msg.sender);
     }
@@ -104,9 +114,13 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         require(msg.sender == req.scanner, "Not scanner");
         require(!req.fulfilled, "Already fulfilled");
         require(bytes(scanDataUri).length > 0, "Scan data URI cannot be empty");
-
+    
         req.fulfilled = true;
         req.scanDataUri = scanDataUri;
+        req.submissions+=1;
+        if(req.submissions>=req.requiredScans){
+            req.fulfilled=true;
+        }
         emit ScanSubmitted(requestId, msg.sender, scanDataUri);
     }
 
