@@ -38,7 +38,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     uint256 public constant REJECTED_TIMEOUT = 3 days;
     mapping(uint256 => ScanRequest) public requests;
     uint256 public nextRequestId;
-    uint256 public constant MIN_PAYMENT = 0.01 ether; //Check to possible adjust for fair payment
+    uint256 public constant MIN_PAYMENT = 0.00 ether; //Check to possible adjust for fair payment
     uint256 public constant SCANNER_PAYMENT = 1; // 1% Not sure about this. Double check it
 
     // Chainlink Functions configuration
@@ -95,7 +95,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
             accepted: false,
             verificationStatus: VerificationStatus.Pending,
             scanDataUri: "",
-            requiredScans: msg.value,
+            requiredScans: 1, //Set at 1 for testing. Change for later
             submissions: 0,
             verificationRequestId: "",
             lastRejected: 0
@@ -108,19 +108,22 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     //If they want a photo and a drone scan, one can accept the photo, another can accept the drone
     //Easiest would just be for only one scan type per request. Maybe see about allowing multiple scans per request.
     function acceptRequest(uint256 requestId) external nonReentrant {
+        emit DebugLog("acceptRequest: entered", requestId);
         ScanRequest storage req = requests[requestId];
-        require(req.scanner == address(0), "Already accepted");  
+        emit DebugLog("acceptRequest: checking scanner", uint256(uint160(req.scanner)));
+        require(req.scanner == address(0), "Already accepted"); 
+        emit DebugLog("acceptRequest: checking sender doesn't match requestor", uint256(uint160(msg.sender))); 
         require(msg.sender != req.requestor, "Requestor cannot be scanner");
-        require(!req.fulfilled, "Already fulfilled");
+        emit DebugLog("acceptRequest: checking accepted", req.accepted ? 1 : 0);
         require(!req.accepted, "Request already accepted");
         req.scanner = msg.sender;
+        req.accepted=true;
         emit ScanAccepted(requestId, msg.sender);
     }
 
     function submitScan(uint256 requestId, string memory scanDataUri) external nonReentrant {
         ScanRequest storage req = requests[requestId];
         require(msg.sender == req.scanner, "Not scanner");
-        require(!req.fulfilled, "Already fulfilled");
         require(req.verificationStatus==VerificationStatus.Pending||req.verificationStatus==VerificationStatus.Rejected, "Cannot submit scan now");
         require(bytes(scanDataUri).length > 0, "Scan data URI cannot be empty");
     

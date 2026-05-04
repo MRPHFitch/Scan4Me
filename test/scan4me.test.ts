@@ -3,11 +3,14 @@ import type { Address } from "viem";
 import { foundry } from "viem/chains";
 import { deployContract } from "viem/actions";
 import artifact from "../artifacts/contracts/scan4me.sol/Scan4MeMarketplace.json";
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, after } from "node:test";
 import { expect } from "chai";
 import * as chai from "chai";
 import chaiAsPromised from "chai-as-promised";
 import { privateKeyToAccount } from "viem/accounts";
+import { parseAbiItem } from "viem";
+import fs from "fs";
+import path from "path";
 chai.use(chaiAsPromised);
 
 //Use a test private key (DO NOT use real keys in production)
@@ -67,19 +70,27 @@ const randoWalletClient = createWalletClient({
   account: randoAccount,
 });
 
+fs.writeFileSync("debugLogs.txt", "");
+
 describe("Scan4MeMarketplace", function () {
   let contractAddress: Address;
 
   beforeEach(async function () {
-    contractAddress = await deployContract(creatorWalletClient, {
+    //Deploy contract and get transaction hash
+    const txHash = await deployContract(creatorWalletClient, {
       abi,
       bytecode: bytecode as `0x${string}`,
       args: [dummyRouter, dummyDonId, dummySubId],
       account: creatorAccount,
     });
+
+    //Wait for the transaction to be mined and get the receipt
+    const receipt = await client.getTransactionReceipt({ hash: txHash });
+    //Extract the contract address
+    contractAddress = receipt.contractAddress as Address;
+    //Assert the contract address is valid
     expect(contractAddress).to.match(/^0x[a-fA-F0-9]{40}$/);
   });
-
 
   //Create Request Test
   //=================================================================================================================//
@@ -90,11 +101,11 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "createRequest",
-        args: ["test data", 123], // Replace with actual args
+        args: ["test data", 1], // Replace with actual args
         value: parseEther("0.01"),
       });
-
-      // Optionally, check the state
+      
+      //Make sure the state aligns
       const request = await client.readContract({
         address: contractAddress,
         abi,
@@ -103,7 +114,7 @@ describe("Scan4MeMarketplace", function () {
       })as ScanRequest;
 
       expect(request.location).to.equal("test data");
-      expect(request.scanType).to.equal(123);
+      expect(request.scanType).to.equal(1);
     });
 
     it("should revert if called with invalid data", async function () {
@@ -123,189 +134,115 @@ describe("Scan4MeMarketplace", function () {
     });
   });
 
-//   //Accept Request Test
-//   //=================================================================================================================//
-//   describe("acceptRequest", function () {
-//   beforeEach(async function () {
-//     //Creator creates the request
-//     await creatorWalletClient.writeContract({
-//       address: contractAddress,
-//       abi,
-//       functionName: "createRequest",
-//       args: ["test data", 123],
-//     });
-//   });
-//     it("should allow acceptor to accept request", async function () {
-//       //Acceptor accepts request
-//       await acceptorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "acceptRequest",
-//         args:[REQUEST_ID],
-//       });
-//       //Check to ensure the request is now locked
-//       const request=await client.readContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "getRequest",
-//         args:[REQUEST_ID],
-//       }) as ScanRequest;
-//       expect(request.accepted).to.be.true;
-//     });
-//     it("should prevent anyone else from accepting the same request", async function(){
-//       //First let's accept
-//       await acceptorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "acceptRequest",
-//         args:[REQUEST_ID],
-//         account: scannerAccount,
-//       });
-//       //Try and accept with a different user
-//       let errorCaught=false;
-//       try{
-//         await randoWalletClient.writeContract({
-//           address: contractAddress,
-//           abi,
-//           functionName: "acceptRequest",
-//           args:[REQUEST_ID],
-//         });
-//       }
-//       catch (err){
-//         errorCaught=true;
-//       }
-//       expect(errorCaught).to.be.true;
-//     })
-//   })
+  //Accept Request Test
+  //=================================================================================================================//
+  describe("acceptRequest", function () {
+  beforeEach(async function () {
+    //Creator creates the request
+    await creatorWalletClient.writeContract({
+      address: contractAddress,
+      abi,
+      functionName: "createRequest",
+      args: ["test data", 1],
+    });
+  });
+    it("should allow acceptor to accept request", async function () {
+      //Acceptor accepts request
+      await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "acceptRequest",
+        args:[REQUEST_ID],
+      });
+      //Check to ensure the request is now locked
+      const request=await client.readContract({
+        address: contractAddress,
+        abi,
+        functionName: "getRequest",
+        args:[REQUEST_ID],
+      }) as ScanRequest;
+      expect(request.accepted).to.be.true;
+    });
+    it("should prevent anyone else from accepting the same request", async function(){
+      //First let's accept
+      await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "acceptRequest",
+        args:[REQUEST_ID],
+        account: scannerAccount,
+      });
+      //Try and accept with a different user
+      let errorCaught=false;
+      try{
+        await randoWalletClient.writeContract({
+          address: contractAddress,
+          abi,
+          functionName: "acceptRequest",
+          args:[REQUEST_ID],
+        });
+      }
+      catch (err){
+        errorCaught=true;
+      }
+      expect(errorCaught).to.be.true;
+    })
+  })
 
-//   //Submit Scan Test
-//   //=================================================================================================================//
-//   describe("submitScan", function () {
-//     let requestID: number;
-//     requestID=REQUEST_ID;
-//     beforeEach(async function () {
-//       //Creator posts request
-//       await creatorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "createRequest",
-//         args: ["test data", 123, 1],
-//       });
-//       //Acceptor accepts request
-//       await acceptorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "acceptRequest",
-//         args: [requestID],
-//       });
-//     });
-//     it("should fulfill the request after one submission if only one is required", async function () {
-//       // Create request with requiredSubmissions = 1
-//       await creatorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "createRequest",
-//         args: ["location1", 0, 100, 1], // last arg: requiredSubmissions = 1
-//       });
-//       // Accept the request
-//       await acceptorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "acceptRequest",
-//         args: [0],
-//       });
-//       // Submit scan
-//       await acceptorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "submitScan",
-//         args: [0, "ipfs://scan-data-1"],
-//       });
-//       // Check fulfilled
-//       const request = await client.readContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "getRequest",
-//         args: [0],
-//       }) as ScanRequest;
-
-//       expect(request.fulfilled).to.be.true;
-//       expect(request.submissions).to.equal(1);
-//     });
-//   });
-//   it("should only fulfill the request after correct number of submissions", async function () {
-//   //Create request with requiredSubmissions = 3
-//   await creatorWalletClient.writeContract({
-//     address: contractAddress,
-//     abi,
-//     functionName: "createRequest",
-//     args: ["location2", 0, 100, 3], // last arg: requiredSubmissions = 3
-//   });
-//   // Accept the request
-//   await acceptorWalletClient.writeContract({
-//     address: contractAddress,
-//     abi,
-//     functionName: "acceptRequest",
-//     args: [1],
-//   });
-//   // Submit first scan
-//   await acceptorWalletClient.writeContract({
-//     address: contractAddress,
-//     abi,
-//     functionName: "submitScan",
-//     args: [1, "ipfs://scan-data-1"],
-//   });
-//   // Check not fulfilled yet
-//   let request = await client.readContract({
-//     address: contractAddress,
-//     abi,
-//     functionName: "getRequest",
-//     args: [1],
-//   }) as ScanRequest;
-
-//   expect(request.fulfilled).to.be.false;
-//   expect(request.submissions).to.equal(1);
-
-//   // Submit second scan
-//   await acceptorWalletClient.writeContract({
-//     address: contractAddress,
-//     abi,
-//     functionName: "submitScan",
-//     args: [1, "ipfs://scan-data-2"],
-//   });
-//   // Submit third scan
-//   await acceptorWalletClient.writeContract({
-//     address: contractAddress,
-//     abi,
-//     functionName: "submitScan",
-//     args: [1, "ipfs://scan-data-3"],
-//   });
-//   // Now it should be fulfilled
-//   request = await client.readContract({
-//     address: contractAddress,
-//     abi,
-//     functionName: "getRequest",
-//     args: [1],
-//   }) as ScanRequest;
-
-//   expect(request.fulfilled).to.be.true;
-//   expect(request.submissions).to.equal(3);
-// });
-//   it("should reject submission from others", async function () {
-//     let errorCaught = false;
-//     try {
-//       await creatorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "submitScan",
-//         args: [REQUEST_ID, "ipfs://bad"],
-//       });
-//     }
-//     catch (err) {
-//       errorCaught = true;
-//     }
-//     expect(errorCaught).to.be.true;
-//   })
+  //Submit Scan Test
+  //=================================================================================================================//
+  describe("submitScan", function () {
+    let requestID: number;
+    requestID=REQUEST_ID;
+    beforeEach(async function () {
+      //Creator posts request
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "createRequest",
+        args: ["test data", 0],
+      });
+      //Acceptor accepts request
+      await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "acceptRequest",
+        args: [requestID],
+      });
+    });
+    it("should fulfill the request after correct number of submissions", async function () {
+      // Submit scan
+      await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "submitScan",
+        args: [0, "ipfs://scan-data-1"],
+      });
+      // Check fulfilled
+      const request = await client.readContract({
+        address: contractAddress,
+        abi,
+        functionName: "getRequest",
+        args: [0],
+      }) as ScanRequest;
+      expect(request.submissions).to.equal(request.requiredScans);
+    });
+  });
+  it("should reject submission from others", async function () {
+    let errorCaught = false;
+    try {
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "submitScan",
+        args: [REQUEST_ID, "ipfs://bad"],
+      });
+    }
+    catch (err) {
+      errorCaught = true;
+    }
+    expect(errorCaught).to.be.true;
+  })
 
 //   //Request Verification Test
 //   //=================================================================================================================//
@@ -411,4 +348,19 @@ describe("Scan4MeMarketplace", function () {
 //   });
 
   //
+
+  after(async function () {
+    // Pull up the logs after all tests
+    const logs = await client.getLogs({
+      address: contractAddress,
+      event: parseAbiItem('event DebugLog(string message, uint256 value)'),
+      fromBlock: 'latest', // or specify the block range if needed
+    });
+
+    // Write to file
+    const logLines = logs.map(
+      (log) => `DebugLog: ${log.args.message ?? "(no message)"} | Value: ${log.args.value?.toString() ?? "(no value)"}`
+    );
+    fs.appendFileSync("debugLogs.txt", logLines.join("\n") + "\n");
+  });
 })
