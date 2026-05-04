@@ -32,8 +32,10 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         uint256 requiredScans;
         uint256 submissions;
         bytes32 verificationRequestId;
+        uint256 lastRejected; // Timestamp of last rejection
     }
 
+    uint256 public constant REJECTED_TIMEOUT = 3 days;
     mapping(uint256 => ScanRequest) public requests;
     uint256 public nextRequestId;
     uint256 public constant MIN_PAYMENT = 0.01 ether; //Check to possible adjust for fair payment
@@ -54,15 +56,18 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     );
     event ScanAccepted(uint256 requestId, address scanner);
     event ScanSubmitted(uint256 requestId, address scanner, string scanDataUri);
+    event RequestReopened(uint256 indexed requestId);
     event VerificationRequested(uint256 requestId, bytes32 verificationRequestId);
     event ScanVerified(uint256 requestId, address scanner, bool approved);
     event FundsWithdrawn(uint256 requestId, address recipient, uint256 amount);
+    event DebugLog(string message, uint256 value);
 
     constructor(
         address _functionsRouter,
         bytes32 _donId,
         uint32 _subscriptionId
-    ) Ownable(msg.sender) FunctionsClient(_functionsRouter) {
+        ) Ownable(msg.sender) FunctionsClient(_functionsRouter) {
+            emit DebugLog("Constructor called", 0);
         chainlinkFunctionsRouter = _functionsRouter;
         donId = _donId;
         chainlinkFunctionsSubscriptionId = _subscriptionId;
@@ -73,10 +78,12 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
 
     function createRequest(
         string memory location,
-        ScanType scanType
-    ) external payable {
+        ScanType scanType) external payable {
+        emit DebugLog("Entered createRequest", msg.value);
         require(msg.value >= MIN_PAYMENT, "Insufficient payment");
+        emit DebugLog("Passed min payment", msg.value);
         require(bytes(location).length > 0, "Location cannot be empty");
+        emit DebugLog("Passed location check", msg.value);
 
         requests[nextRequestId] = ScanRequest({
             requestor: msg.sender,
@@ -90,7 +97,8 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
             scanDataUri: "",
             requiredScans: msg.value,
             submissions: 0,
-            verificationRequestId: ""
+            verificationRequestId: "",
+            lastRejected: 0
         });
 
         emit RequestCreated(nextRequestId, msg.sender, location, scanType, msg.value);
@@ -113,73 +121,97 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         ScanRequest storage req = requests[requestId];
         require(msg.sender == req.scanner, "Not scanner");
         require(!req.fulfilled, "Already fulfilled");
+        require(req.verificationStatus==VerificationStatus.Pending||req.verificationStatus==VerificationStatus.Rejected, "Cannot submit scan now");
         require(bytes(scanDataUri).length > 0, "Scan data URI cannot be empty");
     
-        req.fulfilled = true;
         req.scanDataUri = scanDataUri;
         req.submissions+=1;
-        if(req.submissions>=req.requiredScans){
-            req.fulfilled=true;
-        }
+        req.verificationStatus=VerificationStatus.Pending;
+        req.verificationRequestId=0;
+        req.fulfilled=false;
         emit ScanSubmitted(requestId, msg.sender, scanDataUri);
     }
 
     function scanTypeToString(ScanType scanType) internal pure returns (string memory) {
-    if (scanType == ScanType.PHOTO_360) return "PHOTO_360";
-    if (scanType == ScanType.LIDAR) return "LIDAR";
-    if (scanType == ScanType.STANDARD_PHOTO) return "STANDARD_PHOTO";
-    if (scanType == ScanType.DRONE_SCAN) return "DRONE_SCAN";
-    if (scanType == ScanType.VIDEO_CAPTURE) return "VIDEO_CAPTURE";
-    revert("Unknown scan type");
-}
+        if (scanType == ScanType.PHOTO_360) return "PHOTO_360";
+        if (scanType == ScanType.LIDAR) return "LIDAR";
+        if (scanType == ScanType.STANDARD_PHOTO) return "STANDARD_PHOTO";
+        if (scanType == ScanType.DRONE_SCAN) return "DRONE_SCAN";
+        if (scanType == ScanType.VIDEO_CAPTURE) return "VIDEO_CAPTURE";
+        revert("Unknown scan type");
+    }
 
     function requestVerification(uint256 requestId) external nonReentrant {
-    ScanRequest storage req = requests[requestId];
-    require(req.fulfilled, "Scan not submitted");
-    require(req.verificationStatus == VerificationStatus.Pending, "Already verified");
+        ScanRequest storage req = requests[requestId];
+        require(bytes(req.scanDataUri).length>0, "Scan not submitted");     //Must submit a scan to verify it
+        require(!req.fulfilled, "Already fulfilled");       //Can't already be fulfilled
+        require(req.verificationStatus == VerificationStatus.Pending, "Already verified");
 
-    // Prepare the Chainlink Functions request
-    string[] memory args = new string[](3);
-    args[0] = req.scanDataUri;
-    args[1] = req.location;
-    args[2] = scanTypeToString(req.scanType);
+        // Prepare the Chainlink Functions request
+        string[] memory args = new string[](3);
+        args[0] = req.scanDataUri;
+        args[1] = req.location;
+        args[2] = scanTypeToString(req.scanType);
 
-    string[] memory sources = new string[](1);
-    sources[0] = verificationOracleUrl;
+        string[] memory sources = new string[](1);
+        sources[0] = verificationOracleUrl;
 
-    bytes memory requestBytes = abi.encode(args, sources);
+        bytes memory requestBytes = abi.encode(args, sources);
 
-    // Send the request to Chainlink Functions
-    bytes32 requestIdBytes32 = _sendRequest(
-    requestBytes,
-    uint64(uint256(donId)),
-    chainlinkFunctionsSubscriptionId,
-    bytes32(uint256(300000)) // Gas limit
-);
+        // Send the request to Chainlink Functions
+        bytes32 requestIdBytes32 = _sendRequest(
+        requestBytes,
+        uint64(uint256(donId)),
+        chainlinkFunctionsSubscriptionId,
+        bytes32(uint256(300000)) // Gas limit
+        );
 
-    req.verificationRequestId = requestIdBytes32;
-    req.verificationStatus = VerificationStatus.Pending;
-    emit VerificationRequested(requestId, requestIdBytes32);
-}
+        req.verificationRequestId = requestIdBytes32;
+        req.verificationStatus = VerificationStatus.Pending;
+        emit VerificationRequested(requestId, requestIdBytes32);
+    }
 
     function _fulfillRequest(bytes32 requestId,bytes memory response,bytes memory err)
     internal override {
-    if (err.length > 0) {
+        if (err.length > 0) {
         revert(string(err));
+        }
+
+        // Decode the response
+        (uint256 requestIdUint, bool approved) = abi.decode(response, (uint256, bool));
+
+        // Retrieve the request
+        ScanRequest storage req = requests[requestIdUint];
+        require(req.verificationRequestId == requestId, "Invalid request ID");
+        require(req.verificationStatus == VerificationStatus.Pending, "Already verified");
+
+        // Update the verification status
+        if(approved){
+            req.verificationStatus=VerificationStatus.Approved;
+            req.fulfilled=true;
+        }
+        else{
+            req.verificationStatus=VerificationStatus.Rejected;
+            req.fulfilled=false;
+            req.lastRejected=block.timestamp;
+        }
+    
+        emit ScanVerified(requestIdUint, req.scanner, approved);
     }
 
-    // Decode the response
-    (uint256 requestIdUint, bool approved) = abi.decode(response, (uint256, bool));
+    function revertToOpen(uint256 requestId) external nonReentrant{
+        ScanRequest storage req=requests[requestId];
+        require(req.verificationStatus==VerificationStatus.Rejected, "Not rejected");
+        require(block.timestamp>req.lastRejected+REJECTED_TIMEOUT, "Timeout not reached");
 
-    // Retrieve the request
-    ScanRequest storage req = requests[requestIdUint];
-    require(req.verificationRequestId == requestId, "Invalid request ID");
-    require(req.verificationStatus == VerificationStatus.Pending, "Already verified");
-
-    // Update the verification status
-    req.verificationStatus = approved ? VerificationStatus.Approved : VerificationStatus.Rejected;
-    emit ScanVerified(requestIdUint, req.scanner, approved);
-}
+        req.scanner=address(0);
+        req.accepted=false;
+        req.verificationStatus=VerificationStatus.Pending;
+        req.scanDataUri="";
+        req.verificationRequestId=0;
+        req.fulfilled=false;
+        emit RequestReopened(requestId);
+    }
 
     function withdrawScannerPayment(uint256 requestId) external nonReentrant {
         ScanRequest storage req = requests[requestId];
