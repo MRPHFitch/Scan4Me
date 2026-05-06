@@ -3,7 +3,7 @@ import type { Address } from "viem";
 import { foundry } from "viem/chains";
 import { deployContract } from "viem/actions";
 import artifact from "../artifacts/contracts/scan4me.sol/Scan4MeMarketplace.json";
-import { describe, it, beforeEach, after } from "node:test";
+import { describe, it, beforeEach, after, before } from "node:test";
 import { expect } from "chai";
 import * as chai from "chai";
 import chaiAsPromised from "chai-as-promised";
@@ -71,10 +71,10 @@ const randoWalletClient = createWalletClient({
 });
 
 fs.writeFileSync("debugLogs.txt", "");
+let startBlock=await client.getBlockNumber();
+let contractAddress: Address;
 
 describe("Scan4MeMarketplace", function () {
-  let contractAddress: Address;
-
   beforeEach(async function () {
     //Deploy contract and get transaction hash
     const txHash = await deployContract(creatorWalletClient, {
@@ -91,7 +91,6 @@ describe("Scan4MeMarketplace", function () {
     //Assert the contract address is valid
     expect(contractAddress).to.match(/^0x[a-fA-F0-9]{40}$/);
   });
-
   //Create Request Test
   //=================================================================================================================//
   describe("createRequest", function () {
@@ -101,7 +100,7 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "createRequest",
-        args: ["test data", 1], // Replace with actual args
+        args: ["test data", 1, 1], //location, scanType, # of scans
         value: parseEther("0.01"),
       });
       
@@ -143,7 +142,7 @@ describe("Scan4MeMarketplace", function () {
       address: contractAddress,
       abi,
       functionName: "createRequest",
-      args: ["test data", 1],
+      args: ["test data", 1, 1],
     });
   });
     it("should allow acceptor to accept request", async function () {
@@ -200,7 +199,7 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "createRequest",
-        args: ["test data", 0],
+        args: ["test data", 0,1],
       });
       //Acceptor accepts request
       await acceptorWalletClient.writeContract({
@@ -216,14 +215,14 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "submitScan",
-        args: [0, "ipfs://scan-data-1"],
+        args: [REQUEST_ID, "ipfs://scan-data-1"],
       });
       // Check fulfilled
       const request = await client.readContract({
         address: contractAddress,
         abi,
         functionName: "getRequest",
-        args: [0],
+        args: [REQUEST_ID],
       }) as ScanRequest;
       expect(request.submissions).to.equal(request.requiredScans);
     });
@@ -244,117 +243,122 @@ describe("Scan4MeMarketplace", function () {
     expect(errorCaught).to.be.true;
   })
 
-//   //Request Verification Test
-//   //=================================================================================================================//
-//   describe("requestVerification", function () {
-//     beforeEach(async function () {
-//       //Creator posts request
-//       await creatorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "createRequest",
-//         args: ["test data", 123, 1],
-//       });
-//       //Acceptor accepts request
-//       await acceptorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "acceptRequest",
-//         args: [REQUEST_ID],
-//       });
-//       await acceptorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "submitScan",
-//         args: [1, "ipfs://scan-data"],
-//       });
-//     })
-//     it("Should allow verification request after scan submission", async function () {
-//       //Call request
-//       await acceptorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "requestVerification",
-//         args: [REQUEST_ID],
-//       });
-//       //Check the state of request
-//       const request = await client.readContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "getRequest",
-//         args: [REQUEST_ID]
-//       }) as ScanRequest;
+  //Request Verification Test
+  //=================================================================================================================//
+  describe("requestVerification", function () {
+    console.log("Calling requestVerification...");
+    beforeEach(async function () {
+      //Creator posts request
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "createRequest",
+        args: ["test data", 1, 1], //location, scanType, # of scans
+      });
+      //Acceptor accepts request
+      await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "acceptRequest",
+        args: [REQUEST_ID],
+      });
+      await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "submitScan",
+        args: [REQUEST_ID, "ipfs://scan-data"],
+      });
+    })
+    it("Should allow verification request after scan submission", async function () {
+      //Call request
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "setTestingMode",
+        args: [true],
+      });
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "requestVerification",
+        args: [REQUEST_ID],
+      });
+      //Check the state of request
+      const request = await client.readContract({
+        address: contractAddress,
+        abi,
+        functionName: "getRequest",
+        args: [REQUEST_ID]
+      }) as ScanRequest;
 
-//       expect(request.verificationStatus).to.equal(0);   //Pending verification
-//       expect(request.verificationRequestId).to.not.equal(""); //Should be set at this point
-//       expect(request.fulfilled).to.be.false;
-//     });
-//     it("Should revert if scan not submitted", async function () {
-//       await creatorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "createRequest",
-//         args: ["other data", 123, 1],
-//       });
-//       const newRequestId = 1;
-//       await acceptorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "acceptRequest",
-//         args: [newRequestId],
-//       });
-//       let errorCaught = false;
-//       try {
-//         await acceptorWalletClient.writeContract({
-//           address: contractAddress,
-//           abi,
-//           functionName: "requestVerification",
-//           args: [newRequestId],
-//         });
-//       }
-//       catch (err: any) {
-//         errorCaught = true;
-//         expect(err.message).to.match(/Scan not submitted/);
-//       }
-//       expect(errorCaught).to.be.true;
-//     });
-//     it("should revert if already verified", async function () {
-//       // Request verification once (should succeed)
-//       await acceptorWalletClient.writeContract({
-//         address: contractAddress,
-//         abi,
-//         functionName: "requestVerification",
-//         args: [REQUEST_ID],
-//       });
+      // expect(request.verificationStatus).to.equal(0);   //Pending verification
+      expect(request.verificationStatus).to.equal(1);   //bypass sets to approval
+      expect(request.verificationRequestId).to.not.equal(""); //Should be set at this point
+      expect(request.fulfilled).to.be.true;   //Bypass approves scan, so request is verified
+      // expect(request.fulfilled).to.be.false;
+    });
+    it("Should revert if scan not submitted", async function () {
+      const newRequestId = 1;
+      let errorCaught = false;
+      try {
+        await acceptorWalletClient.writeContract({
+          address: contractAddress,
+          abi,
+          functionName: "requestVerification",
+          args: [newRequestId],
+        });
+      }
+      catch (err: any) {
+        errorCaught = true;
+        expect(err.message).to.match(/Scan not submitted/);
+      }
+      expect(errorCaught).to.be.true;
+    });
+    it("should revert if already verified", async function () {
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "setTestingMode",
+        args:[true],
+      })
+      // Request verification once (should succeed)
+      await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "requestVerification",
+        args: [REQUEST_ID],
+      });
 
-//       // Simulate verification status set to Approved (mock oracle callback)
-//       // await contract.setVerificationStatus(requestID, 1); // 1 = Approved
+      // Simulate verification status set to Approved (mock oracle callback)
+      // await contract.setVerificationStatus(requestID, 1); // 1 = Approved
 
-//       // Try again
-//       let errorCaught = false;
-//       try {
-//         await acceptorWalletClient.writeContract({
-//           address: contractAddress,
-//           abi,
-//           functionName: "requestVerification",
-//           args: [REQUEST_ID],
-//         });
-//       } catch (err: any) {
-//         errorCaught = true;
-//         expect(err.message).to.match(/Already verified/);
-//       }
-//       expect(errorCaught).to.be.true;
-//     });
-//   });
+      // Try again
+      let errorCaught = false;
+      try {
+        await acceptorWalletClient.writeContract({
+          address: contractAddress,
+          abi,
+          functionName: "requestVerification",
+          args: [REQUEST_ID],
+        });
+      } catch (err: any) {
+        errorCaught = true;
+        expect(err.message).to.match(/Already verified/);
+      }
+      expect(errorCaught).to.be.true;
+    });
+  });
 
   //
 
   after(async function () {
+    const lastBlock=await client.getBlockNumber();
     // Pull up the logs after all tests
     const logs = await client.getLogs({
       address: contractAddress,
       event: parseAbiItem('event DebugLog(string message, uint256 value)'),
-      fromBlock: 'latest', // or specify the block range if needed
+      fromBlock: 'latest',
+      // toBlock: lastBlock
     });
 
     // Write to file

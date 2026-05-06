@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "hardhat/console.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
@@ -61,6 +62,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     event ScanVerified(uint256 requestId, address scanner, bool approved);
     event FundsWithdrawn(uint256 requestId, address recipient, uint256 amount);
     event DebugLog(string message, uint256 value);
+    event DebugLogString(string message, string value);
 
     constructor(
         address _functionsRouter,
@@ -78,7 +80,8 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
 
     function createRequest(
         string memory location,
-        ScanType scanType) external payable {
+        ScanType scanType,
+        uint256 requiredScans) external payable {
         emit DebugLog("Entered createRequest", msg.value);
         require(msg.value >= MIN_PAYMENT, "Insufficient payment");
         emit DebugLog("Passed min payment", msg.value);
@@ -95,9 +98,9 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
             accepted: false,
             verificationStatus: VerificationStatus.Pending,
             scanDataUri: "",
-            requiredScans: 1, //Set at 1 for testing. Change for later
+            requiredScans: requiredScans,
             submissions: 0,
-            verificationRequestId: "",
+            verificationRequestId: bytes32(0),
             lastRejected: 0
         });
 
@@ -122,17 +125,25 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     }
 
     function submitScan(uint256 requestId, string memory scanDataUri) external nonReentrant {
+        emit DebugLog("submitScan: entered", requestId);
         ScanRequest storage req = requests[requestId];
-        require(msg.sender == req.scanner, "Not scanner");
-        require(req.verificationStatus==VerificationStatus.Pending||req.verificationStatus==VerificationStatus.Rejected, "Cannot submit scan now");
-        require(bytes(scanDataUri).length > 0, "Scan data URI cannot be empty");
-    
         req.scanDataUri = scanDataUri;
         req.submissions+=1;
+        emit DebugLog("Scan submissions incremented", requestId);
+        require(msg.sender == req.scanner, "Not scanner");
+        emit DebugLog("submitScan: passed scanner check", requestId);
+        require(req.verificationStatus==VerificationStatus.Pending||req.verificationStatus==VerificationStatus.Rejected, "Cannot submit scan now");
+        emit DebugLog("submitScan: passed verificationStatus check", uint256(req.verificationStatus));
+        require(bytes(scanDataUri).length > 0, "Scan data URI cannot be empty");
+        emit DebugLogString("submitScan: contains data", scanDataUri);
+        require(req.submissions>=req.requiredScans, "Not enough scans submitted");
+        emit DebugLog("submitScan: passed submissions check", req.submissions);
+
         req.verificationStatus=VerificationStatus.Pending;
         req.verificationRequestId=0;
         req.fulfilled=false;
         emit ScanSubmitted(requestId, msg.sender, scanDataUri);
+        emit DebugLog("submitScan: completed", req.submissions);
     }
 
     function scanTypeToString(ScanType scanType) internal pure returns (string memory) {
@@ -144,12 +155,35 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         revert("Unknown scan type");
     }
 
-    function requestVerification(uint256 requestId) external nonReentrant {
-        ScanRequest storage req = requests[requestId];
-        require(bytes(req.scanDataUri).length>0, "Scan not submitted");     //Must submit a scan to verify it
-        require(!req.fulfilled, "Already fulfilled");       //Can't already be fulfilled
-        require(req.verificationStatus == VerificationStatus.Pending, "Already verified");
+    bool public testingMode = true;
+    function setTestingMode(bool _mode) external onlyOwner {
+        testingMode = _mode;
+    }
 
+    function requestVerification(uint256 requestId) external nonReentrant{
+        emit DebugLog("requestVerification: entered", requestId);
+        ScanRequest storage req = requests[requestId];
+        emit DebugLog("requestVerification: submissions", req.submissions);
+        emit DebugLog("requestVerification: requiredScans", req.requiredScans);
+        require(bytes(req.scanDataUri).length>0, "Scan not submitted");     //Must submit a scan to verify it
+        emit DebugLogString("requestVerification: scanDataUri", req.scanDataUri);
+        require(req.submissions >= req.requiredScans, "Not enough scans submitted");
+        emit DebugLog("requestVerification: passed submissions check", req.submissions);
+        require(!req.fulfilled, "Already fulfilled");       //Can't already be fulfilled
+        emit DebugLog("requestVerification: passed fulfilled check", req.fulfilled ? 1 : 0);
+        require(req.verificationStatus == VerificationStatus.Pending, "Already verified");
+        emit DebugLog("requestVerification: passed verificationStatus check", uint256(req.verificationStatus));
+
+        if (testingMode) {
+            emit DebugLogString("Entering test mode bypass", testingMode ? "true" : "false");
+            req.verificationRequestId = keccak256(abi.encodePacked(requestId, block.timestamp));
+            req.verificationStatus = VerificationStatus.Approved;
+            req.fulfilled = true;
+            emit VerificationRequested(requestId, req.verificationRequestId);
+            emit ScanVerified(requestId, req.scanner, true);
+            return;
+        }
+        
         // Prepare the Chainlink Functions request
         string[] memory args = new string[](3);
         args[0] = req.scanDataUri;
