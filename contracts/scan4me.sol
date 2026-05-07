@@ -18,7 +18,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     using SafeERC20 for IERC20;
 
     enum ScanType { PHOTO_360, LIDAR, STANDARD_PHOTO, DRONE_SCAN, VIDEO_CAPTURE }
-    enum VerificationStatus { Pending, Approved, Rejected }
+    enum VerificationStatus { NotRequested, Pending, Approved, Rejected }
 
     struct ScanRequest {
         address requestor;
@@ -171,14 +171,15 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         emit DebugLog("requestVerification: passed submissions check", req.submissions);
         require(!req.fulfilled, "Already fulfilled");       //Can't already be fulfilled
         emit DebugLog("requestVerification: passed fulfilled check", req.fulfilled ? 1 : 0);
-        require(req.verificationStatus == VerificationStatus.Pending, "Already verified");
+        require(req.verificationStatus == VerificationStatus.Pending, "Pending review");
         emit DebugLog("requestVerification: passed verificationStatus check", uint256(req.verificationStatus));
 
+        //Test mode bypass
         if (testingMode) {
             emit DebugLogString("Entering test mode bypass", testingMode ? "true" : "false");
             req.verificationRequestId = keccak256(abi.encodePacked(requestId, block.timestamp));
-            req.verificationStatus = VerificationStatus.Approved;
-            req.fulfilled = true;
+            req.verificationStatus = VerificationStatus.Pending;
+            req.fulfilled = false;
             emit VerificationRequested(requestId, req.verificationRequestId);
             emit ScanVerified(requestId, req.scanner, true);
             return;
@@ -210,6 +211,19 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
 
     function _fulfillRequest(bytes32 requestId,bytes memory response,bytes memory err)
     internal override {
+        //Set a test mode bypass
+        if (testingMode) {
+            // Decode the requestId to uint256 (if needed)
+            uint256 uintrequestID = uint256(requestId); // or decode from response if that's your pattern
+
+            // Simulate a successful approval (or rejection)
+            ScanRequest storage test = requests[uintrequestID];
+            test.verificationStatus = VerificationStatus.Approved; // or Rejected for negative test
+            test.fulfilled = true;
+            emit ScanVerified(uintrequestID, test.scanner, true); // true = approved
+            return;
+        }
+
         if (err.length > 0) {
         revert(string(err));
         }

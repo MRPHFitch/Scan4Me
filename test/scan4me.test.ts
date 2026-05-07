@@ -77,6 +77,9 @@ let contractAddress: Address;
 describe("Scan4MeMarketplace", function () {
   beforeEach(async function () {
     //Deploy contract and get transaction hash
+    //=================================================================================================================================================
+    //=================================================================================================================================================
+    //=================================================================================================================================================
     const txHash = await deployContract(creatorWalletClient, {
       abi,
       bytecode: bytecode as `0x${string}`,
@@ -92,7 +95,9 @@ describe("Scan4MeMarketplace", function () {
     expect(contractAddress).to.match(/^0x[a-fA-F0-9]{40}$/);
   });
   //Create Request Test
-  //=================================================================================================================//
+  //=================================================================================================================================================
+  //=================================================================================================================================================
+  //=================================================================================================================================================
   describe("createRequest", function () {
     it("should create a new request and emit an event", async function () {
       // Call the function
@@ -134,7 +139,9 @@ describe("Scan4MeMarketplace", function () {
   });
 
   //Accept Request Test
-  //=================================================================================================================//
+  //=================================================================================================================================================
+  //=================================================================================================================================================
+  //=================================================================================================================================================
   describe("acceptRequest", function () {
   beforeEach(async function () {
     //Creator creates the request
@@ -189,7 +196,9 @@ describe("Scan4MeMarketplace", function () {
   })
 
   //Submit Scan Test
-  //=================================================================================================================//
+  //=================================================================================================================================================
+  //=================================================================================================================================================
+  //=================================================================================================================================================
   describe("submitScan", function () {
     let requestID: number;
     requestID=REQUEST_ID;
@@ -244,9 +253,10 @@ describe("Scan4MeMarketplace", function () {
   })
 
   //Request Verification Test
-  //=================================================================================================================//
+  //=================================================================================================================================================
+  //=================================================================================================================================================
+  //=================================================================================================================================================
   describe("requestVerification", function () {
-    console.log("Calling requestVerification...");
     beforeEach(async function () {
       //Creator posts request
       await creatorWalletClient.writeContract({
@@ -262,6 +272,7 @@ describe("Scan4MeMarketplace", function () {
         functionName: "acceptRequest",
         args: [REQUEST_ID],
       });
+      //Acceptor submits scans
       await acceptorWalletClient.writeContract({
         address: contractAddress,
         abi,
@@ -291,11 +302,9 @@ describe("Scan4MeMarketplace", function () {
         args: [REQUEST_ID]
       }) as ScanRequest;
 
-      // expect(request.verificationStatus).to.equal(0);   //Pending verification
-      expect(request.verificationStatus).to.equal(1);   //bypass sets to approval
+      expect(request.verificationStatus).to.equal(0);   //Pending verification
       expect(request.verificationRequestId).to.not.equal(""); //Should be set at this point
-      expect(request.fulfilled).to.be.true;   //Bypass approves scan, so request is verified
-      // expect(request.fulfilled).to.be.false;
+      expect(request.fulfilled).to.be.false;
     });
     it("Should revert if scan not submitted", async function () {
       const newRequestId = 1;
@@ -328,10 +337,6 @@ describe("Scan4MeMarketplace", function () {
         functionName: "requestVerification",
         args: [REQUEST_ID],
       });
-
-      // Simulate verification status set to Approved (mock oracle callback)
-      // await contract.setVerificationStatus(requestID, 1); // 1 = Approved
-
       // Try again
       let errorCaught = false;
       try {
@@ -343,14 +348,80 @@ describe("Scan4MeMarketplace", function () {
         });
       } catch (err: any) {
         errorCaught = true;
-        expect(err.message).to.match(/Already verified/);
+        expect(err.message).to.match(/Already fulfilled/);
       }
       expect(errorCaught).to.be.true;
     });
   });
 
-  //
+  //Fulfill Request Test Using the Bypass
+  //=================================================================================================================================================
+  //=================================================================================================================================================
+  //=================================================================================================================================================
+  describe("_fulfillRequest", function(){
+    beforeEach(async function(){
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "setTestingMode",
+        args: [true],
+      })
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "createRequest",
+        args:["Taj Mahal", 3, 1],
+      });
+      //Acceptor accepts request
+      await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "acceptRequest",
+        args: [REQUEST_ID],
+      });
+      //Acceptor submits scans
+      await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "submitScan",
+        args: [REQUEST_ID, "ipfs://scan-data"],
+      });
+      //Either of them calls for a review
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: 'requestVerification',
+        args: [REQUEST_ID]
+      });
+    });
+    it("should set verificationStatus to Approved and fulfilled to true", async function () {
+      const request = await client.readContract({
+        address: contractAddress,
+        abi,
+        functionName: "getRequest",
+        args: [REQUEST_ID],
+      }) as ScanRequest;
 
+      expect(request.verificationStatus).to.equal(1); // 1 = Approved
+      expect(request.fulfilled).to.be.true;
+    });
+    it("should not allow fulfill/verification again", async function () {
+      let errorCaught = false;
+      try {
+        await creatorWalletClient.writeContract({
+          address: contractAddress,
+          abi,
+          functionName: "requestVerification",
+          args: [REQUEST_ID],
+        });
+      } catch (err: any) {
+        errorCaught = true;
+        // Accept either "Already verified" or "Already fulfilled" depending on require order
+        expect(err.message).to.match(/Already (verified|fulfilled)/);
+      }
+      expect(errorCaught).to.be.true;
+    });
+  })
   after(async function () {
     const lastBlock=await client.getBlockNumber();
     // Pull up the logs after all tests
