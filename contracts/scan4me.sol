@@ -96,7 +96,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
             scanner: address(0),
             fulfilled: false,
             accepted: false,
-            verificationStatus: VerificationStatus.Pending,
+            verificationStatus: VerificationStatus.NotRequested,
             scanDataUri: "",
             requiredScans: requiredScans,
             submissions: 0,
@@ -132,14 +132,13 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         emit DebugLog("Scan submissions incremented", requestId);
         require(msg.sender == req.scanner, "Not scanner");
         emit DebugLog("submitScan: passed scanner check", requestId);
-        require(req.verificationStatus==VerificationStatus.Pending||req.verificationStatus==VerificationStatus.Rejected, "Cannot submit scan now");
+        require(req.verificationStatus==VerificationStatus.NotRequested||req.verificationStatus==VerificationStatus.Rejected, "Cannot submit scan now");
         emit DebugLog("submitScan: passed verificationStatus check", uint256(req.verificationStatus));
         require(bytes(scanDataUri).length > 0, "Scan data URI cannot be empty");
         emit DebugLogString("submitScan: contains data", scanDataUri);
         require(req.submissions>=req.requiredScans, "Not enough scans submitted");
         emit DebugLog("submitScan: passed submissions check", req.submissions);
 
-        req.verificationStatus=VerificationStatus.Pending;
         req.verificationRequestId=0;
         req.fulfilled=false;
         emit ScanSubmitted(requestId, msg.sender, scanDataUri);
@@ -156,8 +155,17 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     }
 
     bool public testingMode = true;
+    bool public rejected=false;
+    uint256 public mockTime;
     function setTestingMode(bool _mode) external onlyOwner {
         testingMode = _mode;
+    }
+    function setMockTime(uint256 _mockTime) public {
+        require(testingMode, "Not in testing mode");
+        mockTime = _mockTime;
+    }
+    function _now() internal view returns (uint256) {
+        return testingMode ? mockTime : block.timestamp;
     }
 
     function requestVerification(uint256 requestId) external nonReentrant{
@@ -171,13 +179,14 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         emit DebugLog("requestVerification: passed submissions check", req.submissions);
         require(!req.fulfilled, "Already fulfilled");       //Can't already be fulfilled
         emit DebugLog("requestVerification: passed fulfilled check", req.fulfilled ? 1 : 0);
-        require(req.verificationStatus == VerificationStatus.Pending, "Pending review");
+        require(req.verificationStatus == VerificationStatus.NotRequested, "Verification already requested or completed");
+        req.verificationStatus = VerificationStatus.Pending;
         emit DebugLog("requestVerification: passed verificationStatus check", uint256(req.verificationStatus));
 
         //Test mode bypass
         if (testingMode) {
             emit DebugLogString("Entering test mode bypass", testingMode ? "true" : "false");
-            req.verificationRequestId = keccak256(abi.encodePacked(requestId, block.timestamp));
+            req.verificationRequestId = keccak256(abi.encodePacked(requestId, _now()));
             req.verificationStatus = VerificationStatus.Pending;
             req.fulfilled = false;
             emit VerificationRequested(requestId, req.verificationRequestId);
@@ -209,17 +218,27 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         emit VerificationRequested(requestId, requestIdBytes32);
     }
 
+    function testFulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) public {
+        _fulfillRequest(requestId, response, err);
+    }
+
     function _fulfillRequest(bytes32 requestId,bytes memory response,bytes memory err)
     internal override {
+        (uint256 uintrequestID, bool approved) = abi.decode(response, (uint256, bool));
         //Set a test mode bypass
-        if (testingMode) {
+        if (testingMode ) {
             // Decode the requestId to uint256 (if needed)
-            uint256 uintrequestID = uint256(requestId); // or decode from response if that's your pattern
-
             // Simulate a successful approval (or rejection)
             ScanRequest storage test = requests[uintrequestID];
-            test.verificationStatus = VerificationStatus.Approved; // or Rejected for negative test
-            test.fulfilled = true;
+            if (approved) {
+                test.verificationStatus = VerificationStatus.Approved;
+                test.fulfilled = true;
+            } 
+            else {
+                test.verificationStatus = VerificationStatus.Rejected;
+                test.fulfilled = false;
+                test.lastRejected = _now();
+            }
             emit ScanVerified(uintrequestID, test.scanner, true); // true = approved
             return;
         }
@@ -227,14 +246,11 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         if (err.length > 0) {
         revert(string(err));
         }
-
-        // Decode the response
-        (uint256 requestIdUint, bool approved) = abi.decode(response, (uint256, bool));
-
+        
         // Retrieve the request
-        ScanRequest storage req = requests[requestIdUint];
+        ScanRequest storage req = requests[uintrequestID];
         require(req.verificationRequestId == requestId, "Invalid request ID");
-        require(req.verificationStatus == VerificationStatus.Pending, "Already verified");
+        require(req.verificationStatus == VerificationStatus.Pending, "No verification pending");
 
         // Update the verification status
         if(approved){
@@ -244,22 +260,24 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         else{
             req.verificationStatus=VerificationStatus.Rejected;
             req.fulfilled=false;
-            req.lastRejected=block.timestamp;
+            req.lastRejected=_now();
         }
-    
-        emit ScanVerified(requestIdUint, req.scanner, approved);
+        emit ScanVerified(uintrequestID, req.scanner, approved);
     }
 
     function revertToOpen(uint256 requestId) external nonReentrant{
         ScanRequest storage req=requests[requestId];
         require(req.verificationStatus==VerificationStatus.Rejected, "Not rejected");
-        require(block.timestamp>req.lastRejected+REJECTED_TIMEOUT, "Timeout not reached");
-
+        emit DebugLog("revertToOpen: checking timeout", _now());
+        emit DebugLog("revertToOpen: lastRejected", req.lastRejected);
+        emit DebugLog("revertToOpen: timeout threshold", req.lastRejected + REJECTED_TIMEOUT);
+        require(_now()>req.lastRejected+REJECTED_TIMEOUT, "Timeout not reached");
+        
         req.scanner=address(0);
         req.accepted=false;
-        req.verificationStatus=VerificationStatus.Pending;
+        req.verificationStatus=VerificationStatus.NotRequested;
         req.scanDataUri="";
-        req.verificationRequestId=0;
+        req.verificationRequestId=bytes32(0);
         req.fulfilled=false;
         emit RequestReopened(requestId);
     }

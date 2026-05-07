@@ -10,7 +10,7 @@
     "skipLibCheck": true,
     "moduleResolution": "node16",
     "outDir": "dist",
-    "types": ["node", "mocha"]
+    "types": ["node", "mocha", "hardhat"]
   },
   "include": [
     "scripts",

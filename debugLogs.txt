@@ -1,6 +1,1 @@
-DebugLog: requestVerification: entered | Value: 0
-DebugLog: requestVerification: submissions | Value: 1
-DebugLog: requestVerification: requiredScans | Value: 1
-DebugLog: requestVerification: passed submissions check | Value: 1
-DebugLog: requestVerification: passed fulfilled check | Value: 0
-DebugLog: requestVerification: passed verificationStatus check | Value: 0
+
