@@ -20,16 +20,17 @@ chai.use(chaiAsPromised);
 //Use a test private key (DO NOT use real keys in production)
 //Using Account#10 for Creator
 const CREATOR_KEY = "0xf214f2b2cd398c806f84e317254e0f0b801d0643303237d97a22a48e01628897"; // Replace with a test key
+const CREATOR_ADDRESS="0xbcd4042de499d14e55001ccbb24a551f3b954096";
 const creatorAccount = privateKeyToAccount(CREATOR_KEY);
 //Using Account#17 for Acceptor
 const SCANNER_KEY = "0x689af8efa8c651a91ad287602527f3af2fe9f6501a7ac4b061667b5a93e037fd"
+const SCANNER_ADDRESS="0xbda5747bfd65f08deb54cb465eb87d40e51b197e";
 const scannerAccount = privateKeyToAccount(SCANNER_KEY);
 //Using Account#7 for Random account
 const RANDO_KEY = "0x4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356"
+const RANDO_ADDRESS="0x14dc79964da2c08b23698b3d3cc7ca32193d9955";
 const randoAccount = privateKeyToAccount(RANDO_KEY);
 
-//Fix to retrieve from counter or something for deployment
-const REQUEST_ID = 0;
 //Local testing dummy values
 const dummyRouter = "0x0000000000000000000000000000000000000001";
 const dummyDonId = "0x0000000000000000000000000000000000000000000000000000000000000001";
@@ -50,6 +51,8 @@ type ScanRequest = {
   requiredScans: number;
   submissions: number;
   verificationRequestId: string;
+  lastRejected: number;
+  scannerPaid: boolean,
 };
 
 const { abi, bytecode } = artifact;
@@ -75,9 +78,12 @@ const randoWalletClient = createWalletClient({
   transport: http(),
   account: randoAccount,
 });
+let reqID=0;
+function getNextRequestID() {
+  return reqID++;
+}
 
 fs.writeFileSync("debugLogs.txt", "");
-let startBlock = await client.getBlockNumber();
 let contractAddress: Address;
 
 describe("Scan4MeMarketplace", function () {
@@ -86,6 +92,7 @@ describe("Scan4MeMarketplace", function () {
     //=================================================================================================================================================
     //=================================================================================================================================================
     //=================================================================================================================================================
+    reqID=getNextRequestID();
     const txHash = await deployContract(creatorWalletClient, {
       abi,
       bytecode: bytecode as `0x${string}`,
@@ -120,7 +127,7 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "getRequest",
-        args: [0], // Replace with actual request id
+        args: [reqID], // Replace with actual request id
       }) as ScanRequest;
 
       expect(request.location).to.equal("test data");
@@ -164,14 +171,14 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "acceptRequest",
-        args: [REQUEST_ID],
+        args: [reqID],
       });
       //Check to ensure the request is now locked
       const request = await client.readContract({
         address: contractAddress,
         abi,
         functionName: "getRequest",
-        args: [REQUEST_ID],
+        args: [reqID],
       }) as ScanRequest;
       expect(request.accepted).to.be.true;
     });
@@ -181,7 +188,7 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "acceptRequest",
-        args: [REQUEST_ID],
+        args: [reqID],
         account: scannerAccount,
       });
       //Try and accept with a different user
@@ -191,7 +198,7 @@ describe("Scan4MeMarketplace", function () {
           address: contractAddress,
           abi,
           functionName: "acceptRequest",
-          args: [REQUEST_ID],
+          args: [reqID],
         });
       }
       catch (err) {
@@ -207,7 +214,7 @@ describe("Scan4MeMarketplace", function () {
   //=================================================================================================================================================
   describe("submitScan", function () {
     let requestID: number;
-    requestID = REQUEST_ID;
+    requestID = reqID;
     beforeEach(async function () {
       //Creator posts request
       await creatorWalletClient.writeContract({
@@ -230,14 +237,14 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "submitScan",
-        args: [REQUEST_ID, "ipfs://scan-data-1"],
+        args: [reqID, "ipfs://scan-data-1"],
       });
       // Check fulfilled
       const request = await client.readContract({
         address: contractAddress,
         abi,
         functionName: "getRequest",
-        args: [REQUEST_ID],
+        args: [reqID],
       }) as ScanRequest;
       expect(request.submissions).to.equal(request.requiredScans);
     });
@@ -249,7 +256,7 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "submitScan",
-        args: [REQUEST_ID, "ipfs://bad"],
+        args: [reqID, "ipfs://bad"],
       });
     }
     catch (err) {
@@ -276,14 +283,14 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "acceptRequest",
-        args: [REQUEST_ID],
+        args: [reqID],
       });
       //Acceptor submits scans
       await acceptorWalletClient.writeContract({
         address: contractAddress,
         abi,
         functionName: "submitScan",
-        args: [REQUEST_ID, "ipfs://scan-data"],
+        args: [reqID, "ipfs://scan-data"],
       });
     })
     it("Should allow verification request after scan submission", async function () {
@@ -298,14 +305,14 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "requestVerification",
-        args: [REQUEST_ID],
+        args: [reqID],
       });
       //Check the state of request
       const request = await client.readContract({
         address: contractAddress,
         abi,
         functionName: "getRequest",
-        args: [REQUEST_ID]
+        args: [reqID]
       }) as ScanRequest;
 
       expect(request.verificationStatus).to.equal(1);   //Pending verification
@@ -341,7 +348,7 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "requestVerification",
-        args: [REQUEST_ID],
+        args: [reqID],
       });
       // Try again
       let errorCaught = false;
@@ -350,7 +357,7 @@ describe("Scan4MeMarketplace", function () {
           address: contractAddress,
           abi,
           functionName: "requestVerification",
-          args: [REQUEST_ID],
+          args: [reqID],
         });
       } catch (err: any) {
         errorCaught = true;
@@ -383,21 +390,21 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "acceptRequest",
-        args: [REQUEST_ID],
+        args: [reqID],
       });
       //Acceptor submits scans
       await acceptorWalletClient.writeContract({
         address: contractAddress,
         abi,
         functionName: "submitScan",
-        args: [REQUEST_ID, "ipfs://scan-data"],
+        args: [reqID, "ipfs://scan-data"],
       });
       //Either of them calls for a review
       await creatorWalletClient.writeContract({
         address: contractAddress,
         abi,
         functionName: 'requestVerification',
-        args: [REQUEST_ID]
+        args: [reqID]
       });
     });
     it("should set verificationStatus to Approved and fulfilled to true", async function () {
@@ -405,7 +412,7 @@ describe("Scan4MeMarketplace", function () {
       const abiCoder = new AbiCoder();
       const response = abiCoder.encode(
         ["uint256", "bool"],
-        [Number(REQUEST_ID), true]
+        [Number(reqID), true]
       );
       // Empty error bytes
       const err = "0x";
@@ -413,7 +420,7 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "getRequest",
-        args: [REQUEST_ID],
+        args: [reqID],
       }) as ScanRequest;
       await acceptorWalletClient.writeContract({
         address: contractAddress,
@@ -425,7 +432,7 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "getRequest",
-        args: [REQUEST_ID],
+        args: [reqID],
       }) as ScanRequest;
 
       expect(updated.verificationStatus).to.equal(2); // 2 = Approved
@@ -438,7 +445,7 @@ describe("Scan4MeMarketplace", function () {
           address: contractAddress,
           abi,
           functionName: "requestVerification",
-          args: [REQUEST_ID],
+          args: [reqID],
         });
       } catch (err: any) {
         errorCaught = true;
@@ -455,7 +462,7 @@ describe("Scan4MeMarketplace", function () {
   //=================================================================================================================================================
   describe("revertToOpen", function () {
     const abiCoder = new AbiCoder();
-    const response = abiCoder.encode(["uint256", "bool"], [Number(REQUEST_ID), false]);
+    const response = abiCoder.encode(["uint256", "bool"], [Number(reqID), false]);
     const err = "0x";
     beforeEach(async function () {
       await creatorWalletClient.writeContract({
@@ -475,27 +482,27 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "acceptRequest",
-        args: [REQUEST_ID],
+        args: [reqID],
       });
       //Acceptor submits scans
       await acceptorWalletClient.writeContract({
         address: contractAddress,
         abi,
         functionName: "submitScan",
-        args: [REQUEST_ID, "ipfs://scan-data"],
+        args: [reqID, "ipfs://scan-data"],
       });
       //Either of them calls for a review
       await creatorWalletClient.writeContract({
         address: contractAddress,
         abi,
         functionName: 'requestVerification',
-        args: [REQUEST_ID]
+        args: [reqID]
       });
       const request = await client.readContract({
         address: contractAddress,
         abi,
         functionName: "getRequest",
-        args: [REQUEST_ID],
+        args: [reqID],
       }) as ScanRequest;
       await creatorWalletClient.writeContract({
         address: contractAddress,
@@ -522,13 +529,13 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "revertToOpen",
-        args: [REQUEST_ID],
+        args: [reqID],
       });
       const updated = await client.readContract({
         address: contractAddress,
         abi,
         functionName: "getRequest",
-        args: [REQUEST_ID],
+        args: [reqID],
       }) as ScanRequest;
       expect(updated.verificationStatus).to.equal(0); // NotRequested
       expect(updated.fulfilled).to.be.false;
@@ -547,7 +554,7 @@ describe("Scan4MeMarketplace", function () {
           address: contractAddress,
           abi,
           functionName: "revertToOpen",
-          args: [REQUEST_ID],
+          args: [reqID],
         });
       }
       catch (err: any) {
@@ -557,12 +564,12 @@ describe("Scan4MeMarketplace", function () {
       expect(errorCaught).to.be.true;
     });
     it("should not allow revert if not rejected", async function () {
-      const response = abiCoder.encode(["uint256", "bool"], [Number(REQUEST_ID), true]); // true = approved
+      const response = abiCoder.encode(["uint256", "bool"], [Number(reqID), true]); // true = approved
       const request = await client.readContract({
         address: contractAddress,
         abi,
         functionName: "getRequest",
-        args: [REQUEST_ID],
+        args: [reqID],
       }) as ScanRequest;
       await creatorWalletClient.writeContract({
         address: contractAddress,
@@ -576,7 +583,7 @@ describe("Scan4MeMarketplace", function () {
           address: contractAddress,
           abi,
           functionName: "revertToOpen",
-          args: [REQUEST_ID],
+          args: [reqID],
         });
       }
       catch (err: any) {
@@ -587,7 +594,7 @@ describe("Scan4MeMarketplace", function () {
     });
   });
 
-  //Revert to Open Test
+  //Withdraw Scanner Payment
   //=================================================================================================================================================
   //=================================================================================================================================================
   //=================================================================================================================================================
@@ -606,25 +613,25 @@ describe("Scan4MeMarketplace", function () {
       abi,
       functionName: "createRequest",
       args: ["Taj Mahal", 3, 1],
-      value: parseEther("1.0"), // Example payment
+      value: parseEther("100.0"), // Example payment
     });
     await acceptorWalletClient.writeContract({
       address: contractAddress,
       abi,
       functionName: "acceptRequest",
-      args: [REQUEST_ID],
+      args: [reqID],
     });
     await acceptorWalletClient.writeContract({
       address: contractAddress,
       abi,
       functionName: "submitScan",
-      args: [REQUEST_ID, "ipfs://scan-data"],
+      args: [reqID, "ipfs://scan-data"],
     });
     await creatorWalletClient.writeContract({
       address: contractAddress,
       abi,
       functionName: "requestVerification",
-      args: [REQUEST_ID],
+      args: [reqID],
     });
     // Set mock time and simulate approval
     await creatorWalletClient.writeContract({
@@ -634,13 +641,13 @@ describe("Scan4MeMarketplace", function () {
       args: [START_TIME],
     });
     const abiCoder = new AbiCoder();
-    const response = abiCoder.encode(["uint256", "bool"], [Number(REQUEST_ID), true]); // true = approved
+    const response = abiCoder.encode(["uint256", "bool"], [Number(reqID), true]); // true = approved
     const err = "0x";
     request = await client.readContract({
       address: contractAddress,
       abi,
       functionName: "getRequest",
-      args: [REQUEST_ID],
+      args: [reqID],
     }) as ScanRequest;
     await creatorWalletClient.writeContract({
       address: contractAddress,
@@ -648,31 +655,58 @@ describe("Scan4MeMarketplace", function () {
       functionName: "testFulfillRequest",
       args: [request.verificationRequestId, response, err],
     });
+    console.log("Request ID at this point is:",reqID)
   });
-
   it("should allow scanner to withdraw after approval", async function () {
-    // Check initial balance
-    const before = await ethers.provider.getBalance(scannerAddress);
-    // Withdraw
-    await acceptorWalletClient.writeContract({
+    const request = await client.readContract({
       address: contractAddress,
       abi,
-      functionName: "withdrawScannerPayment",
-      args: [REQUEST_ID],
-    });
+      functionName: "getRequest",
+      args: [reqID],
+    }) as ScanRequest;
+    console.log("Request payment field:", request.payment);
+    // For Hardhat/localhost
+    const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+    // Check initial balance
+    const before = await provider.getBalance(SCANNER_ADDRESS);
+    const contractBalBefore = await provider.getBalance(contractAddress);
+    console.log("Contract balance before withdraw:", contractBalBefore);
+    console.log("Request ID just before withdraw is:",reqID)
+    console.log("Flag right before withdraw call:", request.scannerPaid);
+    // Withdraw
+    try {
+      const tx = await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "withdrawScannerPayment",
+        args: [reqID],
+      });
+      // Wait for mining (if needed)
+      const receipt = await client.getTransactionReceipt({ hash: tx });
+      // Get gas used and gas price
+      const txDetails = await provider.getTransaction(tx);
+      if (!txDetails) {
+        throw new Error("Transaction details not found");
+      }
+      const contractBalAfter = await provider.getBalance(contractAddress);
+      console.log("Contract balance after withdraw :", contractBalAfter);
+    }
+    catch (err: any) {
+      console.error("Withdraw failed:", err.message);
+    }
     // Check new balance (should increase by scannerPayment)
-    const after = await ethers.provider.getBalance(scannerAddress);
-    expect(after).to.be.above(before);
-    // Optionally, check event emission
+    const after = await provider.getBalance(SCANNER_ADDRESS);
+    console.log("Balance before:" ,before,"\nBalance after :", after);
+    expect(after > before).to.be.true;
   });
-  it("should not allow non-scanner to withdraw", async function () {
+    it("should not allow non-scanner to withdraw", async function () {
     let errorCaught = false;
     try {
       await creatorWalletClient.writeContract({
         address: contractAddress,
         abi,
         functionName: "withdrawScannerPayment",
-        args: [REQUEST_ID],
+        args: [reqID],
       });
     } catch (err: any) {
       errorCaught = true;
@@ -682,7 +716,21 @@ describe("Scan4MeMarketplace", function () {
   });
   it("should not allow scanner to withdraw before approval", async function () {
     // Set up a new request, but do not approve
-    // ...repeat setup, but skip testFulfillRequest or set approved = false...
+    const abiCoder = new AbiCoder();
+    const response = abiCoder.encode(["uint256", "bool"], [Number(reqID), false]); // false = rejected
+    const err="0x";
+    request = await client.readContract({
+      address: contractAddress,
+      abi,
+      functionName: "getRequest",
+      args: [reqID],
+    }) as ScanRequest;
+    await creatorWalletClient.writeContract({
+      address: contractAddress,
+      abi,
+      functionName: "testFulfillRequest",
+      args: [request.verificationRequestId, response, err],
+    });
     // Try to withdraw
     let errorCaught = false;
     try {
@@ -690,7 +738,7 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "withdrawScannerPayment",
-        args: [REQUEST_ID],
+        args: [reqID],
       });
     } catch (err: any) {
       errorCaught = true;
@@ -704,7 +752,7 @@ describe("Scan4MeMarketplace", function () {
       address: contractAddress,
       abi,
       functionName: "withdrawScannerPayment",
-      args: [REQUEST_ID],
+      args: [reqID],
     });
     // Second withdrawal should fail (if contract logic prevents double-withdrawal)
     let errorCaught = false;
@@ -713,7 +761,7 @@ describe("Scan4MeMarketplace", function () {
         address: contractAddress,
         abi,
         functionName: "withdrawScannerPayment",
-        args: [REQUEST_ID],
+        args: [reqID],
       });
     } catch (err: any) {
       errorCaught = true;

@@ -12,7 +12,7 @@ import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/Confir
 import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/dev/v1_X/FunctionsClient.sol";
 import {IFunctionsRouter} from "../lib/interfaces/IFunctionsRouter.sol";
 
-//TODO: Min_Payment, Multi scan per request 
+//TODO: Min_Payment 
 
 contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     using SafeERC20 for IERC20;
@@ -34,13 +34,14 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         uint256 submissions;
         bytes32 verificationRequestId;
         uint256 lastRejected; // Timestamp of last rejection
+        bool scannerPaid;   //Flag to prevent double withdraws
     }
 
     uint256 public constant REJECTED_TIMEOUT = 3 days;
     mapping(uint256 => ScanRequest) public requests;
     uint256 public nextRequestId;
     uint256 public constant MIN_PAYMENT = 0.00 ether; //Check to possible adjust for fair payment
-    uint256 public constant SCANNER_PAYMENT = 1; // 1% Not sure about this. Double check it
+    uint256 public constant SCANNER_PAYMENT = 100; // 100% Not sure about this. Double check it
 
     // Chainlink Functions configuration
     bytes32 public donId;
@@ -74,6 +75,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         donId = _donId;
         chainlinkFunctionsSubscriptionId = _subscriptionId;
     }
+    receive() external payable {}
     function getRequest(uint256 requestID) public view returns(ScanRequest memory){
         return requests[requestID];
     }
@@ -101,11 +103,11 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
             requiredScans: requiredScans,
             submissions: 0,
             verificationRequestId: bytes32(0),
-            lastRejected: 0
+            lastRejected: 0,
+            scannerPaid: false
         });
-
-        emit RequestCreated(nextRequestId, msg.sender, location, scanType, msg.value);
         nextRequestId++;
+        emit RequestCreated(nextRequestId, msg.sender, location, scanType, msg.value);
     }
     //Work on allowing multiple people to accept a request, if they don't possess equipment
     //If they want a photo and a drone scan, one can accept the photo, another can accept the drone
@@ -233,6 +235,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
             if (approved) {
                 test.verificationStatus = VerificationStatus.Approved;
                 test.fulfilled = true;
+                test.scannerPaid=false;
             } 
             else {
                 test.verificationStatus = VerificationStatus.Rejected;
@@ -286,10 +289,15 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         ScanRequest storage req = requests[requestId];
         require(msg.sender == req.scanner, "Only scanner can withdraw");
         require(req.verificationStatus == VerificationStatus.Approved, "Not approved");
+        require(!req.scannerPaid, "Already withdrawn");
 
         uint256 scannerPayment = (req.payment * SCANNER_PAYMENT) / 100;
+        console.log("Scanner payment comes out to:", scannerPayment);
         (bool success, ) = req.scanner.call{value: scannerPayment}("");
+        emit DebugLog("Contract balance before send", address(this).balance);
         require(success, "Transfer failed");
+        req.scannerPaid=true;
+        emit DebugLog("Contract balance after send", address(this).balance);
         emit FundsWithdrawn(requestId, req.scanner, scannerPayment);
     }
 

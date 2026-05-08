@@ -1,1 +1,2 @@
-
+DebugLog: Contract balance before send | Value: 0
+DebugLog: Contract balance after send | Value: 0
