@@ -1,5 +1,8 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+interface IScan4MeMarketplace {
+    function acceptRequest(uint256 requestId) external;
+    function withdrawScannerPayment(uint256 requestId) external;
+    function submitScan(uint256 requestId, string calldata scanDataUri) external;
+}
 
 contract TestReceiver {
     event Received(address sender, uint256 amount, uint256 balanceAfter);
@@ -13,4 +16,20 @@ contract TestReceiver {
     function getBalance() external view returns (uint256) {
         return address(this).balance;
     }
+
+    // Accept a scan request as the scanner
+    function acceptAsScanner(address marketplace, uint256 requestId) external {
+        IScan4MeMarketplace(marketplace).acceptRequest(requestId);
+    }
+
+    //Submit the scan as scanner
+    function submitScanToMarketplace(address marketplace, uint256 requestId, string calldata scanDataUri) external {
+        IScan4MeMarketplace(marketplace).submitScan(requestId, scanDataUri);
+    }
+
+    // Withdraw payment as the scanner
+    function withdrawPayment(address marketplace, uint256 requestId) external {
+        IScan4MeMarketplace(marketplace).withdrawScannerPayment(requestId);
+    }
+    
 }

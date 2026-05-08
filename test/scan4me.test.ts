@@ -1,19 +1,18 @@
-import { network } from "hardhat";
 import { createPublicClient, createWalletClient, http, parseEther } from "viem";
 import type { Address } from "viem";
 import { foundry } from "viem/chains";
 import { deployContract } from "viem/actions";
 import artifact from "../artifacts/contracts/scan4me.sol/Scan4MeMarketplace.json";
-import { describe, it, beforeEach, after, before } from "node:test";
+import { describe, it, beforeEach, after } from "node:test";
 import { expect } from "chai";
 import * as chai from "chai";
 import chaiAsPromised from "chai-as-promised";
 import { privateKeyToAccount } from "viem/accounts";
 import { parseAbiItem } from "viem";
 import fs from "fs";
-import path from "path";
-import { log } from "console";
 import hre from "hardhat";
+import { ethers } from "ethers";
+import TestReceiverJson from "../artifacts/contracts/testReceive.sol/TestReceiver.json";
 import { AbiCoder } from "ethers";
 chai.use(chaiAsPromised);
 
@@ -56,12 +55,18 @@ type ScanRequest = {
 };
 
 const { abi, bytecode } = artifact;
-const ethers = (hre as any).ethers;
+// const ethers = (hre as any).ethers;
 
 const client = createPublicClient({
   chain: foundry,
   transport: http(),
 });
+
+// const TestReceiver = await ethers.getContractFactory("TestReceiver");
+//     testReceiver = await TestReceiver.deploy();
+//     await testReceiver.deployed();
+//     testReceiverAddress = testReceiver.address;
+
 
 // Create wallets for signing transactions
 const creatorWalletClient = createWalletClient({
@@ -600,182 +605,232 @@ describe("Scan4MeMarketplace", function () {
   //=================================================================================================================================================
   //=================================================================================================================================================
   //=================================================================================================================================================
-  describe("withdrawScannerPayment", function(){
-    let request:ScanRequest;
+  describe("withdrawScannerPayment", function () {
+    let request: ScanRequest;
     beforeEach(async function () {
-    // Set up contract and request
-    await creatorWalletClient.writeContract({
-      address: contractAddress,
-      abi,
-      functionName: "setTestingMode",
-      args: [true],
-    });
-    await creatorWalletClient.writeContract({
-      address: contractAddress,
-      abi,
-      functionName: "createRequest",
-      args: ["Taj Mahal", 3, 1],
-      value: parseEther("100.0"), // Example payment
-    });
-    await acceptorWalletClient.writeContract({
-      address: contractAddress,
-      abi,
-      functionName: "acceptRequest",
-      args: [reqID],
-    });
-    await acceptorWalletClient.writeContract({
-      address: contractAddress,
-      abi,
-      functionName: "submitScan",
-      args: [reqID, "ipfs://scan-data"],
-    });
-    await creatorWalletClient.writeContract({
-      address: contractAddress,
-      abi,
-      functionName: "requestVerification",
-      args: [reqID],
-    });
-    // Set mock time and simulate approval
-    await creatorWalletClient.writeContract({
-      address: contractAddress,
-      abi,
-      functionName: "setMockTime",
-      args: [START_TIME],
-    });
-    const abiCoder = new AbiCoder();
-    const response = abiCoder.encode(["uint256", "bool"], [Number(reqID), true]); // true = approved
-    const err = "0x";
-    request = await client.readContract({
-      address: contractAddress,
-      abi,
-      functionName: "getRequest",
-      args: [reqID],
-    }) as ScanRequest;
-    await creatorWalletClient.writeContract({
-      address: contractAddress,
-      abi,
-      functionName: "testFulfillRequest",
-      args: [request.verificationRequestId, response, err],
-    });
-  });
-  it("should allow scanner to withdraw after approval", async function () {
-    const TestReceiver = await ethers.getContractFactory("TestReceiver");
-    testReceiver = await TestReceiver.deploy();
-    await testReceiver.deployed();
-    testReceiverAddress = testReceiver.address;
-
-    // Now you can use testReceiverAddress as the scanner address
-    console.log("TestReceiver deployed at:", testReceiverAddress);
-    const request = await client.readContract({
-      address: contractAddress,
-      abi,
-      functionName: "getRequest",
-      args: [reqID],
-    }) as ScanRequest;
-    // For Hardhat/localhost
-    const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
-    const scannerAddress=request.scanner;
-    // Check initial balance
-    const before = await provider.getBalance(scannerAddress);
-    const contractBalBefore = await provider.getBalance(contractAddress);
-    
-    // Withdraw
-    try {
-      const tx = await testReceiverAddress.writeContract({
-        address: contractAddress,
-        abi,
-        functionName: "withdrawScannerPayment",
-        args: [reqID],
-      });
-      // Wait for mining
-      await client.getTransactionReceipt({ hash: tx });
-    }
-    catch (err: any) {
-      console.error("Withdraw failed:", err.message);
-    }
-    // Check new balance (should increase by scannerPayment)
-    const balance = await ethers.provider.getBalance(testReceiverAddress);
-    console.log("TestReceiver balance:", balance.toString());
-    const after = await provider.getBalance(scannerAddress);
-    const contractBalAfter = await provider.getBalance(contractAddress);
-    console.log("Scanner balance before:", before.toString());
-    console.log("Scanner balance after:", after.toString());
-    console.log("Contract balance before:", contractBalBefore.toString());
-    console.log("Contract balance after:", contractBalAfter.toString());
-    expect(after > before).to.be.true;
-  });
-    it("should not allow non-scanner to withdraw", async function () {
-    let errorCaught = false;
-    try {
+      // Set up contract and request
       await creatorWalletClient.writeContract({
         address: contractAddress,
         abi,
-        functionName: "withdrawScannerPayment",
+        functionName: "setTestingMode",
+        args: [true],
+      });
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "createRequest",
+        args: ["Taj Mahal", 3, 1],
+        value: parseEther("100.0"), // Example payment
+      });
+      await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "acceptRequest",
         args: [reqID],
       });
-    } catch (err: any) {
-      errorCaught = true;
-      expect(err.message).to.match(/Only scanner can withdraw/);
-    }
-    expect(errorCaught).to.be.true;
-  });
-  it("should not allow scanner to withdraw before approval", async function () {
-    // Set up a new request, but do not approve
-    const abiCoder = new AbiCoder();
-    const response = abiCoder.encode(["uint256", "bool"], [Number(reqID), false]); // false = rejected
-    const err="0x";
-    request = await client.readContract({
-      address: contractAddress,
-      abi,
-      functionName: "getRequest",
-      args: [reqID],
-    }) as ScanRequest;
-    await creatorWalletClient.writeContract({
-      address: contractAddress,
-      abi,
-      functionName: "testFulfillRequest",
-      args: [request.verificationRequestId, response, err],
+      await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "submitScan",
+        args: [reqID, "ipfs://scan-data"],
+      });
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "requestVerification",
+        args: [reqID],
+      });
+      // Set mock time and simulate approval
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "setMockTime",
+        args: [START_TIME],
+      });
+      const abiCoder = new AbiCoder();
+      const response = abiCoder.encode(["uint256", "bool"], [Number(reqID), true]); // true = approved
+      const err = "0x";
+      request = await client.readContract({
+        address: contractAddress,
+        abi,
+        functionName: "getRequest",
+        args: [reqID],
+      }) as ScanRequest;
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "testFulfillRequest",
+        args: [request.verificationRequestId, response, err],
+      });
     });
-    // Try to withdraw
-    let errorCaught = false;
-    try {
+    it("should not allow non-scanner to withdraw", async function () {
+      let errorCaught = false;
+      try {
+        await creatorWalletClient.writeContract({
+          address: contractAddress,
+          abi,
+          functionName: "withdrawScannerPayment",
+          args: [reqID],
+        });
+      } catch (err: any) {
+        errorCaught = true;
+        expect(err.message).to.match(/Only scanner can withdraw/);
+      }
+      expect(errorCaught).to.be.true;
+    });
+    it("should not allow scanner to withdraw before approval", async function () {
+      // Set up a new request, but do not approve
+      const abiCoder = new AbiCoder();
+      const response = abiCoder.encode(["uint256", "bool"], [Number(reqID), false]); // false = rejected
+      const err = "0x";
+      request = await client.readContract({
+        address: contractAddress,
+        abi,
+        functionName: "getRequest",
+        args: [reqID],
+      }) as ScanRequest;
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "testFulfillRequest",
+        args: [request.verificationRequestId, response, err],
+      });
+      // Try to withdraw
+      let errorCaught = false;
+      try {
+        await acceptorWalletClient.writeContract({
+          address: contractAddress,
+          abi,
+          functionName: "withdrawScannerPayment",
+          args: [reqID],
+        });
+      } catch (err: any) {
+        errorCaught = true;
+        expect(err.message).to.match(/Not approved/);
+      }
+      expect(errorCaught).to.be.true;
+    });
+    it("should not allow scanner to withdraw twice", async function () {
+      // First withdrawal
       await acceptorWalletClient.writeContract({
         address: contractAddress,
         abi,
         functionName: "withdrawScannerPayment",
         args: [reqID],
       });
-    } catch (err: any) {
-      errorCaught = true;
-      expect(err.message).to.match(/Not approved/);
-    }
-    expect(errorCaught).to.be.true;
-  });
-  it("should not allow scanner to withdraw twice", async function () {
-    // First withdrawal
-    await acceptorWalletClient.writeContract({
-      address: contractAddress,
-      abi,
-      functionName: "withdrawScannerPayment",
-      args: [reqID],
+      // Second withdrawal should fail (if contract logic prevents double-withdrawal)
+      let errorCaught = false;
+      try {
+        await acceptorWalletClient.writeContract({
+          address: contractAddress,
+          abi,
+          functionName: "withdrawScannerPayment",
+          args: [reqID],
+        });
+      } catch (err: any) {
+        errorCaught = true;
+        // The revert reason may vary depending on your contract logic
+      }
+      expect(errorCaught).to.be.true;
     });
-    // Second withdrawal should fail (if contract logic prevents double-withdrawal)
-    let errorCaught = false;
-    try {
-      await acceptorWalletClient.writeContract({
-        address: contractAddress,
-        abi,
-        functionName: "withdrawScannerPayment",
-        args: [reqID],
-      });
-    } catch (err: any) {
-      errorCaught = true;
-      // The revert reason may vary depending on your contract logic
-    }
-    expect(errorCaught).to.be.true;
-  });
   })
-  after(async function () {
+    
+  //Different describe to test the withdrawal funds
+  describe("special case for withdrawScannerPayment", function () {
+    let request: ScanRequest;
+    it("should allow scanner contract to accept and withdraw after approval", async function () {
+      //Set up provider and signer
+      const testProvider = new ethers.JsonRpcProvider("http://localhost:8545");
+      const signer = await testProvider.getSigner();
+      //Deploy TestReceiver contract
+      const factory = new ethers.ContractFactory(
+        TestReceiverJson.abi,
+        TestReceiverJson.bytecode,
+        signer
+      );
+      const testReceiver = await factory.deploy();
+      await testReceiver.waitForDeployment();
+      const testReceiverAddress = testReceiver.target;
+      // Set up the request
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "setTestingMode",
+        args: [true],
+      });
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "createRequest",
+        args: ["Taj Mahal", 3, 1],
+        value: parseEther("100.0"), // Example payment
+      });
+      //Accept the request as the scanner (TestReceiver)
+      //Call acceptAsScanner from the EOA that owns TestReceiver
+      const receiver = new ethers.Contract(
+        testReceiverAddress,
+        TestReceiverJson.abi,
+        signer
+      );
+      await receiver.acceptAsScanner(contractAddress, reqID);
+
+      //Submit scan, verify it, fulfill it
+      await receiver.submitScanToMarketplace(contractAddress, reqID, "ipfs://scan-data");
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "requestVerification",
+        args: [reqID],
+      });
+      // Set mock time and simulate approval
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "setMockTime",
+        args: [START_TIME],
+      });
+      const abiCoder = new AbiCoder();
+      const response = abiCoder.encode(["uint256", "bool"], [Number(reqID), true]); // true = approved
+      const err = "0x";
+      request = await client.readContract({
+        address: contractAddress,
+        abi,
+        functionName: "getRequest",
+        args: [reqID],
+      }) as ScanRequest;
+      console.log("Scanner address in request:", request.scanner);
+      console.log("TestReceiver address:", testReceiverAddress);
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "testFulfillRequest",
+        args: [request.verificationRequestId, response, err],
+      });
+      //Check balances before withdrawal
+      const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+      const before = await provider.getBalance(testReceiverAddress);
+      const contractBalBefore = await provider.getBalance(contractAddress);
+      //Withdraw payment as the scanner (TestReceiver)
+      try {
+        const tx = await receiver.withdrawPayment(contractAddress, reqID);
+        const receipt = await tx.wait(); //Wait for mining
+        console.log("Events:", receipt.events);
+      } catch (err: any) {
+        console.error("Withdraw failed:", err.message);
+      }
+      //Check balances after withdrawal
+      const after = await provider.getBalance(testReceiverAddress);
+      const contractBalAfter = await provider.getBalance(contractAddress);
+      console.log("TestReceiver balance before:", before.toString());
+      console.log("TestReceiver balance after:", after.toString());
+      console.log("Contract balance before:", contractBalBefore.toString());
+      console.log("Contract balance after:", contractBalAfter.toString());
+
+      expect(after > before).to.be.true;
+    });
+  })
+
+    after(async function () {
     // Pull up the logs after all tests
     const logs = await client.getLogs({
       address: contractAddress,
