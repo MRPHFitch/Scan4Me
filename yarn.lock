@@ -962,7 +962,7 @@
     tsx "^4.19.3"
     zod "^3.23.8"
 
-"@nomicfoundation/hardhat-toolbox-viem@^5.0.4":
+"@nomicfoundation/hardhat-toolbox-viem@5.0.4":
   version "5.0.4"
   resolved "https://registry.yarnpkg.com/@nomicfoundation/hardhat-toolbox-viem/-/hardhat-toolbox-viem-5.0.4.tgz#ec221bc8c1be0cd4395dd1c17a5f1878667059be"
   integrity sha512-yXFcdpNx4/arbCnlt5QE3OsE7Bo+35NXGyRKRBgXt97cJBDZIZZYrFwIcYmmeo+1fYTTbggHXOptMd6Ev4xFAg==

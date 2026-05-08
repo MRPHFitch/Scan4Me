@@ -13,8 +13,8 @@ import { parseAbiItem } from "viem";
 import fs from "fs";
 import path from "path";
 import { log } from "console";
+import hre from "hardhat";
 import { AbiCoder } from "ethers";
-import {ethers} from "ethers";
 chai.use(chaiAsPromised);
 
 //Use a test private key (DO NOT use real keys in production)
@@ -56,6 +56,7 @@ type ScanRequest = {
 };
 
 const { abi, bytecode } = artifact;
+const ethers = (hre as any).ethers;
 
 const client = createPublicClient({
   chain: foundry,
@@ -87,6 +88,7 @@ fs.writeFileSync("debugLogs.txt", "");
 let contractAddress: Address;
 
 describe("Scan4MeMarketplace", function () {
+  let testReceiver, testReceiverAddress;
   beforeEach(async function () {
     //Deploy contract and get transaction hash
     //=================================================================================================================================================
@@ -655,48 +657,51 @@ describe("Scan4MeMarketplace", function () {
       functionName: "testFulfillRequest",
       args: [request.verificationRequestId, response, err],
     });
-    console.log("Request ID at this point is:",reqID)
   });
   it("should allow scanner to withdraw after approval", async function () {
+    const TestReceiver = await ethers.getContractFactory("TestReceiver");
+    testReceiver = await TestReceiver.deploy();
+    await testReceiver.deployed();
+    testReceiverAddress = testReceiver.address;
+
+    // Now you can use testReceiverAddress as the scanner address
+    console.log("TestReceiver deployed at:", testReceiverAddress);
     const request = await client.readContract({
       address: contractAddress,
       abi,
       functionName: "getRequest",
       args: [reqID],
     }) as ScanRequest;
-    console.log("Request payment field:", request.payment);
     // For Hardhat/localhost
     const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+    const scannerAddress=request.scanner;
     // Check initial balance
-    const before = await provider.getBalance(SCANNER_ADDRESS);
+    const before = await provider.getBalance(scannerAddress);
     const contractBalBefore = await provider.getBalance(contractAddress);
-    console.log("Contract balance before withdraw:", contractBalBefore);
-    console.log("Request ID just before withdraw is:",reqID)
-    console.log("Flag right before withdraw call:", request.scannerPaid);
+    
     // Withdraw
     try {
-      const tx = await acceptorWalletClient.writeContract({
+      const tx = await testReceiverAddress.writeContract({
         address: contractAddress,
         abi,
         functionName: "withdrawScannerPayment",
         args: [reqID],
       });
-      // Wait for mining (if needed)
-      const receipt = await client.getTransactionReceipt({ hash: tx });
-      // Get gas used and gas price
-      const txDetails = await provider.getTransaction(tx);
-      if (!txDetails) {
-        throw new Error("Transaction details not found");
-      }
-      const contractBalAfter = await provider.getBalance(contractAddress);
-      console.log("Contract balance after withdraw :", contractBalAfter);
+      // Wait for mining
+      await client.getTransactionReceipt({ hash: tx });
     }
     catch (err: any) {
       console.error("Withdraw failed:", err.message);
     }
     // Check new balance (should increase by scannerPayment)
-    const after = await provider.getBalance(SCANNER_ADDRESS);
-    console.log("Balance before:" ,before,"\nBalance after :", after);
+    const balance = await ethers.provider.getBalance(testReceiverAddress);
+    console.log("TestReceiver balance:", balance.toString());
+    const after = await provider.getBalance(scannerAddress);
+    const contractBalAfter = await provider.getBalance(contractAddress);
+    console.log("Scanner balance before:", before.toString());
+    console.log("Scanner balance after:", after.toString());
+    console.log("Contract balance before:", contractBalBefore.toString());
+    console.log("Contract balance after:", contractBalAfter.toString());
     expect(after > before).to.be.true;
   });
     it("should not allow non-scanner to withdraw", async function () {
@@ -771,7 +776,6 @@ describe("Scan4MeMarketplace", function () {
   });
   })
   after(async function () {
-    const lastBlock = await client.getBlockNumber();
     // Pull up the logs after all tests
     const logs = await client.getLogs({
       address: contractAddress,

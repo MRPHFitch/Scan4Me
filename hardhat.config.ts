@@ -4,15 +4,15 @@ import { configVariable, defineConfig } from "hardhat/config";
 export default defineConfig({
   plugins: [hardhatToolboxViemPlugin],
   solidity: {
-    version: "0.8.28",
+   version: "0.8.28",
     settings: {
       optimizer: {
         enabled: true,
         runs: 200,
       },
       viaIR: true,
-    },
-  },
+        },
+      },
   networks: {
     hardhatMainnet: {
       type: "edr-simulated",

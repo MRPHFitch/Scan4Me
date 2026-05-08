@@ -76,6 +76,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         chainlinkFunctionsSubscriptionId = _subscriptionId;
     }
     receive() external payable {}
+
     function getRequest(uint256 requestID) public view returns(ScanRequest memory){
         return requests[requestID];
     }
@@ -293,11 +294,15 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
 
         uint256 scannerPayment = (req.payment * SCANNER_PAYMENT) / 100;
         console.log("Scanner payment comes out to:", scannerPayment);
+        console.log("Trying to send payment out.");
+        console.log("Recipient address:", req.scanner);
+        console.log("Contract balance before:", address(this).balance);
         (bool success, ) = req.scanner.call{value: scannerPayment}("");
-        emit DebugLog("Contract balance before send", address(this).balance);
+        console.log("ETH send success:", success);
         require(success, "Transfer failed");
-        req.scannerPaid=true;
-        emit DebugLog("Contract balance after send", address(this).balance);
+        console.log("Before scanner is paid variable is:", req.scannerPaid);
+        req.scannerPaid = true;
+        console.log("After setting scannerPaid variable is:", req.scannerPaid);
         emit FundsWithdrawn(requestId, req.scanner, scannerPayment);
     }
 
