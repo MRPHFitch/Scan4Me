@@ -893,6 +893,45 @@ describe("Scan4MeMarketplace", function () {
     });
   })
 
+  //=================================================================================================================================================
+  //=================================================================================================================================================
+  //Set Oracle Verification
+  //=================================================================================================================================================
+  //=================================================================================================================================================
+  describe("setVerificationOracleUrl", function () {
+  it("should allow the owner to set the oracle URL", async function () {
+    await creatorWalletClient.writeContract({
+      address: contractAddress,
+      abi,
+      functionName: "setVerificationOracleUrl",
+      args: ["https://oracle.example.com"],
+    });
+    const url = await client.readContract({
+      address: contractAddress,
+      abi,
+      functionName: "verificationOracleUrl",
+    });
+    expect(url).to.equal("https://oracle.example.com");
+  });
+
+  it("should not allow non-owner to set the oracle URL", async function () {
+    let errorCaught = false;
+    try {
+      await randoWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "setVerificationOracleUrl",
+        args: ["https://malicious.example.com"],
+      });
+    } catch (err: any) {
+      errorCaught = true;
+      console.log("Non-owner can't set it:", err.message);
+      expect(err.message).to.match(/OwnableUnauthorizedAccount/);
+    }
+    expect(errorCaught).to.be.true;
+  });
+});
+
 
 
   //=================================================================================================================================================
