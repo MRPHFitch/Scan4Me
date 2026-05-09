@@ -18,9 +18,10 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     using SafeERC20 for IERC20;
 
     enum ScanType { PHOTO_360, LIDAR, STANDARD_PHOTO, DRONE_SCAN, VIDEO_CAPTURE }
-    enum VerificationStatus { NotRequested, Pending, Approved, Rejected }
+    enum VerificationStatus { NotRequested, Pending, Approved, Rejected, Canceled }
 
     struct ScanRequest {
+        bool exists;
         address requestor;
         string location;
         ScanType scanType;
@@ -41,7 +42,6 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     mapping(uint256 => ScanRequest) public requests;
     uint256 public nextRequestId;
     uint256 public constant MIN_PAYMENT = 0.00 ether; //Check to possible adjust for fair payment
-    uint256 public constant SCANNER_PAYMENT = 100; // 100% Not sure about this. Double check it
 
     // Chainlink Functions configuration
     bytes32 public donId;
@@ -59,6 +59,8 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     event ScanAccepted(uint256 requestId, address scanner);
     event ScanSubmitted(uint256 requestId, address scanner, string scanDataUri);
     event RequestReopened(uint256 indexed requestId);
+    event RequestCanceled(uint256 requestId);
+    event RequestDeleted(uint256 requestId);
     event VerificationRequested(uint256 requestId, bytes32 verificationRequestId);
     event ScanVerified(uint256 requestId, address scanner, bool approved);
     event FundsWithdrawn(uint256 requestId, address recipient, uint256 amount);
@@ -92,6 +94,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         emit DebugLog("Passed location check", msg.value);
 
         requests[nextRequestId] = ScanRequest({
+            exists: true,
             requestor: msg.sender,
             location: location,
             scanType: scanType,
@@ -292,36 +295,31 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         require(req.verificationStatus == VerificationStatus.Approved, "Not approved");
         require(!req.scannerPaid, "Already withdrawn");
 
-        uint256 scannerPayment = (req.payment * SCANNER_PAYMENT) / 100;
-        console.log("Scanner payment comes out to:", scannerPayment);
-        console.log("Trying to send payment out.");
-        console.log("Recipient address:", req.scanner);
-        console.log("Contract balance before:", address(this).balance);
+        uint256 scannerPayment = req.payment;
         (bool success, ) = req.scanner.call{value: scannerPayment}("");
-        console.log("ETH send success:", success);
         require(success, "Transfer failed");
-        console.log("Before scanner is paid variable is:", req.scannerPaid);
         req.scannerPaid = true;
-        console.log("After setting scannerPaid variable is:", req.scannerPaid);
         emit FundsWithdrawn(requestId, req.scanner, scannerPayment);
     }
 
-    function withdrawRequestorFunds(uint256 requestId) external nonReentrant {
+    function cancelRequest(uint256 requestId) external nonReentrant {
         ScanRequest storage req = requests[requestId];
-        require(msg.sender == req.requestor, "Only requestor can withdraw");
+        require(req.exists, "Request doesn't exist");
+        require(req.verificationStatus != VerificationStatus.Approved, "Cannot cancel after approval");
+        require(req.verificationStatus != VerificationStatus.Canceled, "Already canceled");
+        require(!req.accepted, "Cannot cancel after acceptance");
+        require(msg.sender == req.requestor, "Only requestor can cancel");
+        
+        // Refund the payment before deleting
+        uint256 amount = req.payment;
+        req.payment = 0;
+        (bool success, ) = req.requestor.call{value: amount}("");
+        require(success, "Transfer failed");
 
-        if (req.verificationStatus == VerificationStatus.Approved) {
-            uint256 requestorRefund = req.payment - ((req.payment * SCANNER_PAYMENT) / 100);
-            (bool success, ) = req.requestor.call{value: requestorRefund}("");
-            require(success, "Transfer failed");
-            emit FundsWithdrawn(requestId, req.requestor, requestorRefund);
-        } else if (req.verificationStatus == VerificationStatus.Rejected) {
-            (bool success, ) = req.requestor.call{value: req.payment}("");
-            require(success, "Transfer failed");
-            emit FundsWithdrawn(requestId, req.requestor, req.payment);
-        } else {
-            revert("Verification still pending");
-        }
+        // Cancel and then Delete the request from storage
+        delete requests[requestId];
+        emit RequestCanceled(requestId);
+        emit RequestDeleted(requestId);
     }
 
     function setVerificationOracleUrl(string memory _url) external onlyOwner {

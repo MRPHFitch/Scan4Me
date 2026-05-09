@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "hardhat/console.sol";
+
 interface IScan4MeMarketplace {
     function acceptRequest(uint256 requestId) external;
     function withdrawScannerPayment(uint256 requestId) external;
@@ -9,6 +14,7 @@ contract TestReceiver {
 
     // This function is called when ETH is sent to the contract
     receive() external payable {
+        console.log("The receive function has been accessed.");
         emit Received(msg.sender, msg.value, address(this).balance);
     }
 

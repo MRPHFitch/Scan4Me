@@ -2,18 +2,16 @@ import { createPublicClient, createWalletClient, http, parseEther } from "viem";
 import type { Address } from "viem";
 import { foundry } from "viem/chains";
 import { deployContract } from "viem/actions";
-import artifact from "../artifacts/contracts/scan4me.sol/Scan4MeMarketplace.json";
+import { privateKeyToAccount } from "viem/accounts";
+import { parseAbiItem } from "viem";
 import { describe, it, beforeEach, after } from "node:test";
+import artifact from "../artifacts/contracts/scan4me.sol/Scan4MeMarketplace.json";
+import fs from "fs";
+import { AbiCoder } from "ethers";
 import { expect } from "chai";
 import * as chai from "chai";
 import chaiAsPromised from "chai-as-promised";
-import { privateKeyToAccount } from "viem/accounts";
-import { parseAbiItem } from "viem";
-import fs from "fs";
-import hre from "hardhat";
-import { ethers } from "ethers";
-import TestReceiverJson from "../artifacts/contracts/testReceive.sol/TestReceiver.json";
-import { AbiCoder } from "ethers";
+import { error } from "console";
 chai.use(chaiAsPromised);
 
 //Use a test private key (DO NOT use real keys in production)
@@ -38,6 +36,7 @@ const dummySubId = 1;
 const START_TIME = 1_000_000_000; // Any arbitrary UNIX timestamp for fastforward options
 
 type ScanRequest = {
+  exists: boolean;
   requestor: string;
   location: string;
   scanType: number;
@@ -61,12 +60,6 @@ const client = createPublicClient({
   chain: foundry,
   transport: http(),
 });
-
-// const TestReceiver = await ethers.getContractFactory("TestReceiver");
-//     testReceiver = await TestReceiver.deploy();
-//     await testReceiver.deployed();
-//     testReceiverAddress = testReceiver.address;
-
 
 // Create wallets for signing transactions
 const creatorWalletClient = createWalletClient({
@@ -95,8 +88,10 @@ let contractAddress: Address;
 describe("Scan4MeMarketplace", function () {
   let testReceiver, testReceiverAddress;
   beforeEach(async function () {
-    //Deploy contract and get transaction hash
+
     //=================================================================================================================================================
+    //=================================================================================================================================================
+    //Deploy contract and get transaction hash
     //=================================================================================================================================================
     //=================================================================================================================================================
     reqID=getNextRequestID();
@@ -114,8 +109,9 @@ describe("Scan4MeMarketplace", function () {
     //Assert the contract address is valid
     expect(contractAddress).to.match(/^0x[a-fA-F0-9]{40}$/);
   });
-  //Create Request Test
   //=================================================================================================================================================
+  //=================================================================================================================================================
+  //Create Request Test
   //=================================================================================================================================================
   //=================================================================================================================================================
   describe("createRequest", function () {
@@ -157,9 +153,9 @@ describe("Scan4MeMarketplace", function () {
       expect(errorCaught).to.be.true;
     });
   });
-
-  //Accept Request Test
   //=================================================================================================================================================
+  //=================================================================================================================================================
+  //Accept Request Test
   //=================================================================================================================================================
   //=================================================================================================================================================
   describe("acceptRequest", function () {
@@ -214,9 +210,9 @@ describe("Scan4MeMarketplace", function () {
       expect(errorCaught).to.be.true;
     })
   })
-
-  //Submit Scan Test
   //=================================================================================================================================================
+  //=================================================================================================================================================
+  //Submit Scan Test
   //=================================================================================================================================================
   //=================================================================================================================================================
   describe("submitScan", function () {
@@ -271,9 +267,9 @@ describe("Scan4MeMarketplace", function () {
     }
     expect(errorCaught).to.be.true;
   })
-
-  //Request Verification Test
   //=================================================================================================================================================
+  //=================================================================================================================================================
+  //Request Verification Test
   //=================================================================================================================================================
   //=================================================================================================================================================
   describe("requestVerification", function () {
@@ -373,9 +369,9 @@ describe("Scan4MeMarketplace", function () {
       expect(errorCaught).to.be.true;
     });
   });
-
-  //Fulfill Request Test Using the Bypass
   //=================================================================================================================================================
+  //=================================================================================================================================================
+  //Fulfill Request Test Using the Bypass
   //=================================================================================================================================================
   //=================================================================================================================================================
   describe("_fulfillRequest", function () {
@@ -462,9 +458,9 @@ describe("Scan4MeMarketplace", function () {
       expect(errorCaught).to.be.true;
     });
   });
-
-  //Revert to Open Test
   //=================================================================================================================================================
+  //=================================================================================================================================================
+  //Revert to Open Test
   //=================================================================================================================================================
   //=================================================================================================================================================
   describe("revertToOpen", function () {
@@ -601,8 +597,9 @@ describe("Scan4MeMarketplace", function () {
     });
   });
 
-  //Withdraw Scanner Payment
   //=================================================================================================================================================
+  //=================================================================================================================================================
+  //Withdraw Scanner Payment
   //=================================================================================================================================================
   //=================================================================================================================================================
   describe("withdrawScannerPayment", function () {
@@ -734,24 +731,100 @@ describe("Scan4MeMarketplace", function () {
       expect(errorCaught).to.be.true;
     });
   })
-    
-  //Different describe to test the withdrawal funds
-  describe("special case for withdrawScannerPayment", function () {
-    let request: ScanRequest;
-    it("should allow scanner contract to accept and withdraw after approval", async function () {
-      //Set up provider and signer
-      const testProvider = new ethers.JsonRpcProvider("http://localhost:8545");
-      const signer = await testProvider.getSigner();
-      //Deploy TestReceiver contract
-      const factory = new ethers.ContractFactory(
-        TestReceiverJson.abi,
-        TestReceiverJson.bytecode,
-        signer
-      );
-      const testReceiver = await factory.deploy();
-      await testReceiver.waitForDeployment();
-      const testReceiverAddress = testReceiver.target;
-      // Set up the request
+
+  //=================================================================================================================================================
+  //=================================================================================================================================================
+  //Cancel Request Test
+  //=================================================================================================================================================
+  //=================================================================================================================================================
+  describe("cancelRequest", function () {
+    beforeEach(async function () {
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "createRequest",
+        args: ["St. Peter's Basilica", 2, 1],
+        value: parseEther("100.0"),
+      });
+    });
+    it("should allow the requestor to cancel before acceptance, refund funds, and delete the request", async function () {
+      // Get requestor's balance before
+      const before = await client.getBalance({ address: CREATOR_ADDRESS });
+      // Cancel the request
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "cancelRequest",
+        args: [reqID],
+      });
+      // Check that the request is deleted (fields reset to zero/default)
+      const request = await client.readContract({
+        address: contractAddress,
+        abi,
+        functionName: "getRequest",
+        args: [reqID],
+      }) as ScanRequest;
+      console.log("Status of request:", request.verificationStatus);
+      expect(request.requestor).to.equal("0x0000000000000000000000000000000000000000");
+      // Check that funds were refunded (allow for gas cost)
+      const after = await client.getBalance({ address: CREATOR_ADDRESS });
+      expect(after > before).to.be.true; // Should be true, minus gas
+    });
+    it("should not allow non-requestor to cancel", async function () {
+      let errorCaught=false;
+      try{
+        await randoWalletClient.writeContract({
+          address: contractAddress,
+          abi,
+          functionName: "cancelRequest",
+          args: [reqID],
+        })
+      }
+      catch(err:any){
+        errorCaught=true;
+        expect(err.message).to.match(/Only requestor can cancel/);
+      }
+      expect(errorCaught).to.be.true;
+    });
+    it("should not allow cancel after acceptance", async function () {
+      let errorCaught=false;
+      // Acceptor accepts request
+      await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "acceptRequest",
+        args: [reqID],
+      });
+      try{
+        await creatorWalletClient.writeContract({
+          address: contractAddress,
+          abi,
+          functionName: "cancelRequest",
+          args: [reqID],
+        })
+      }
+      catch(err:any){
+        errorCaught=true;
+        expect(err.message).to.match(/Cannot cancel after acceptance/);
+      }
+      expect(errorCaught).to.be.true;
+    });
+    it("should not allow cancel after approval", async function () {
+      let errorCaught=false;
+      // Acceptor accepts and submits scan
+      await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "acceptRequest",
+        args: [reqID],
+      });
+      await acceptorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "submitScan",
+        args: [reqID, "ipfs://scan-data"],
+      });
+      // Request verification and approve
       await creatorWalletClient.writeContract({
         address: contractAddress,
         abi,
@@ -761,74 +834,168 @@ describe("Scan4MeMarketplace", function () {
       await creatorWalletClient.writeContract({
         address: contractAddress,
         abi,
-        functionName: "createRequest",
-        args: ["Taj Mahal", 3, 1],
-        value: parseEther("100.0"), // Example payment
-      });
-      //Accept the request as the scanner (TestReceiver)
-      //Call acceptAsScanner from the EOA that owns TestReceiver
-      const receiver = new ethers.Contract(
-        testReceiverAddress,
-        TestReceiverJson.abi,
-        signer
-      );
-      await receiver.acceptAsScanner(contractAddress, reqID);
-
-      //Submit scan, verify it, fulfill it
-      await receiver.submitScanToMarketplace(contractAddress, reqID, "ipfs://scan-data");
-      await creatorWalletClient.writeContract({
-        address: contractAddress,
-        abi,
         functionName: "requestVerification",
         args: [reqID],
       });
-      // Set mock time and simulate approval
-      await creatorWalletClient.writeContract({
-        address: contractAddress,
-        abi,
-        functionName: "setMockTime",
-        args: [START_TIME],
-      });
-      const abiCoder = new AbiCoder();
-      const response = abiCoder.encode(["uint256", "bool"], [Number(reqID), true]); // true = approved
-      const err = "0x";
-      request = await client.readContract({
+      const request = await client.readContract({
         address: contractAddress,
         abi,
         functionName: "getRequest",
         args: [reqID],
       }) as ScanRequest;
-      console.log("Scanner address in request:", request.scanner);
-      console.log("TestReceiver address:", testReceiverAddress);
+      const abiCoder = new AbiCoder();
+      const response = abiCoder.encode(["uint256", "bool"], [Number(reqID), true]);
+      const err = "0x";
       await creatorWalletClient.writeContract({
         address: contractAddress,
         abi,
         functionName: "testFulfillRequest",
         args: [request.verificationRequestId, response, err],
       });
-      //Check balances before withdrawal
-      const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
-      const before = await provider.getBalance(testReceiverAddress);
-      const contractBalBefore = await provider.getBalance(contractAddress);
-      //Withdraw payment as the scanner (TestReceiver)
-      try {
-        const tx = await receiver.withdrawPayment(contractAddress, reqID);
-        const receipt = await tx.wait(); //Wait for mining
-        console.log("Events:", receipt.events);
-      } catch (err: any) {
-        console.error("Withdraw failed:", err.message);
+      try{
+        await creatorWalletClient.writeContract({
+          address: contractAddress,
+          abi,
+          functionName: "cancelRequest",
+          args: [reqID],
+        })
       }
-      //Check balances after withdrawal
-      const after = await provider.getBalance(testReceiverAddress);
-      const contractBalAfter = await provider.getBalance(contractAddress);
-      console.log("TestReceiver balance before:", before.toString());
-      console.log("TestReceiver balance after:", after.toString());
-      console.log("Contract balance before:", contractBalBefore.toString());
-      console.log("Contract balance after:", contractBalAfter.toString());
-
-      expect(after > before).to.be.true;
+      catch(err:any){
+        errorCaught=true;
+        expect(err.message).to.match(/Cannot cancel after approval/);
+      }
+        expect(errorCaught).to.be.true;
+    });
+    it("should not allow cancel if already canceled", async function () {
+      let errorCaught=false;
+      // Cancel once
+      await creatorWalletClient.writeContract({
+        address: contractAddress,
+        abi,
+        functionName: "cancelRequest",
+        args: [reqID],
+      });
+      // Try to cancel again
+      try{
+        await creatorWalletClient.writeContract({
+          address: contractAddress,
+          abi,
+          functionName: "cancelRequest",
+          args: [reqID],
+        })
+      }
+      catch(err:any){
+        errorCaught=true;
+        console.log("Can't cancel if already canceled error:", err.message);
+        expect(err.message).to.match(/Request doesn't exist/);   //Since the original request has been deleted, there's only default values now.
+      }
+        expect(errorCaught).to.be.true;
     });
   })
+
+
+
+  //=================================================================================================================================================
+  //=================================================================================================================================================
+  //All that just to discover that there's an issue within hardhat testing that won't allow this to actually work. That's a solid 8-10 hours lost. Welp.
+  //Win some lose some. Below is the test that took away all my sanity.
+  //=================================================================================================================================================
+  //=================================================================================================================================================
+  
+  // //Different describe to test the withdrawal funds
+  // describe("special case for withdrawScannerPayment", function () {
+  //   let request: ScanRequest;
+  //   it("should allow scanner contract to accept and withdraw after approval", async function () {
+  //     //Set up provider and signer
+  //     const testProvider = new ethers.JsonRpcProvider("http://localhost:8545");
+  //     const signer = await testProvider.getSigner();
+  //     //Deploy TestReceiver contract
+  //     const factory = new ethers.ContractFactory(
+  //       TestReceiverJson.abi,
+  //       TestReceiverJson.bytecode,
+  //       signer
+  //     );
+  //     const testReceiver = await factory.deploy();
+  //     await testReceiver.waitForDeployment();
+  //     const testReceiverAddress = testReceiver.target;
+  //     // Set up the request
+  //     await creatorWalletClient.writeContract({
+  //       address: contractAddress,
+  //       abi,
+  //       functionName: "setTestingMode",
+  //       args: [true],
+  //     });
+  //     await creatorWalletClient.writeContract({
+  //       address: contractAddress,
+  //       abi,
+  //       functionName: "createRequest",
+  //       args: ["Taj Mahal", 3, 1],
+  //       value: parseEther("100.0"), // Example payment
+  //     });
+  //     //Accept the request as the scanner (TestReceiver)
+  //     //Call acceptAsScanner from the EOA that owns TestReceiver
+  //     const receiver = new ethers.Contract(
+  //       testReceiverAddress,
+  //       TestReceiverJson.abi,
+  //       signer
+  //     );
+  //     await receiver.acceptAsScanner(contractAddress, reqID);
+
+  //     //Submit scan, verify it, fulfill it
+  //     await receiver.submitScanToMarketplace(contractAddress, reqID, "ipfs://scan-data");
+  //     await creatorWalletClient.writeContract({
+  //       address: contractAddress,
+  //       abi,
+  //       functionName: "requestVerification",
+  //       args: [reqID],
+  //     });
+  //     // Set mock time and simulate approval
+  //     await creatorWalletClient.writeContract({
+  //       address: contractAddress,
+  //       abi,
+  //       functionName: "setMockTime",
+  //       args: [START_TIME],
+  //     });
+  //     const abiCoder = new AbiCoder();
+  //     const response = abiCoder.encode(["uint256", "bool"], [Number(reqID), true]); // true = approved
+  //     const err = "0x";
+  //     request = await client.readContract({
+  //       address: contractAddress,
+  //       abi,
+  //       functionName: "getRequest",
+  //       args: [reqID],
+  //     }) as ScanRequest;
+  //     console.log("Scanner address in request:", request.scanner);
+  //     console.log("TestReceiver address:", testReceiverAddress);
+  //     await creatorWalletClient.writeContract({
+  //       address: contractAddress,
+  //       abi,
+  //       functionName: "testFulfillRequest",
+  //       args: [request.verificationRequestId, response, err],
+  //     });
+  //     //Check balances before withdrawal
+  //     const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+  //     const before = await provider.getBalance(testReceiverAddress);
+  //     const contractBalBefore = await provider.getBalance(contractAddress);
+  //     //Withdraw payment as the scanner (TestReceiver)
+  //     try {
+  //       const tx = await receiver.withdrawPayment(contractAddress, reqID);
+  //       const receipt = await tx.wait(); //Wait for mining
+  //       console.log("Events:", receipt.events);
+  //     } catch (err: any) {
+  //       console.error("Withdraw failed:", err.message);
+  //     }
+  //     //Check balances after withdrawal
+  //     const after = await provider.getBalance(testReceiverAddress);
+  //     const contractBalAfter = await provider.getBalance(contractAddress);
+  //     console.log("TestReceiver balance before:", before.toString());
+  //     console.log("TestReceiver balance after:", after.toString());
+  //     console.log("Contract balance before:", contractBalBefore.toString());
+  //     console.log("Contract balance after:", contractBalAfter.toString());
+
+  //     expect(after > before).to.be.true;
+  //   });
+  // })
 
     after(async function () {
     // Pull up the logs after all tests
