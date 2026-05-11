@@ -41,7 +41,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     uint256 public constant REJECTED_TIMEOUT = 3 days;
     mapping(uint256 => ScanRequest) public requests;
     uint256 public nextRequestId;
-    uint256 public constant MIN_PAYMENT = 0.00 ether; //Check to possible adjust for fair payment
+    uint256 public constant MIN_PAYMENT = 0.01 ether; //Check to possible adjust for fair payment
 
     // Chainlink Functions configuration
     bytes32 public donId;
