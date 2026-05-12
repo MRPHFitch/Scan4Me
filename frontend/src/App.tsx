@@ -1,12 +1,13 @@
 import { ConnectButton } from '@rainbow-me/rainbowkit'
-import { useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   useAccount,
+  usePublicClient,
   useReadContract,
   useWriteContract,
   useWaitForTransactionReceipt,
 } from 'wagmi'
-import { parseEther } from 'viem'
+import { formatEther, parseEther } from 'viem'
 import { scan4MeAbi, scan4MeContractAddress } from './contract'
 import './App.css'
 
@@ -23,23 +24,53 @@ const scanTypeOptions = [
   { label: 'VIDEO_CAPTURE', value: 4 },
 ] as const
 
+type ContractRequest = {
+  exists: boolean
+  requestor: `0x${string}`
+  location: string
+  scanType: number
+  payment: bigint
+  scanner: `0x${string}`
+  fulfilled: boolean
+  accepted: boolean
+  verificationStatus: number
+  scanDataUri: string
+  requiredScans: bigint
+  submissions: bigint
+  scannerPaid: boolean
+}
+
 function App() {
   const { address, isConnected } = useAccount()
+  const publicClient = usePublicClient()
 
   const [location, setLocation] = useState('')
   const [scanType, setScanType] = useState<number>(0)
   const [requiredScans, setRequiredScans] = useState(1)
   const [paymentEth, setPaymentEth] = useState('0.01')
 
-  const [requestId, setRequestId] = useState('0')
+  const [requestId, setRequestId] = useState('')
   const [scanDataUri, setScanDataUri] = useState('')
 
-  const [testingMode, setTestingMode] = useState(true)
-  const [mockTime, setMockTime] = useState('')
+  const [availableRequests, setAvailableRequests] = useState<
+    Array<{ id: bigint; data: ContractRequest }>
+  >([])
+  const [loadingRequests, setLoadingRequests] = useState(false)
+  const [requestsError, setRequestsError] = useState('')
+
+  const requestIdValue = (() => {
+    try {
+      return BigInt(requestId || '0')
+    } catch {
+      return 0n
+    }
+  })()
+
+  const hasSelectedRequest = requestId !== ''
+  const canUseContract = Boolean(scan4MeContractAddress)
 
   const {
     data: nextRequestId,
-    // refetch: refetchNextRequestId,
     isLoading: loadingNextRequestId,
   } = useReadContract({
     address: scan4MeContractAddress,
@@ -47,10 +78,7 @@ function App() {
     functionName: 'nextRequestId',
   })
 
-  const {
-    data: minPayment,
-    // refetch: refetchMinPayment,
-  } = useReadContract({
+  const { data: minPayment } = useReadContract({
     address: scan4MeContractAddress,
     abi: scan4MeAbi,
     functionName: 'MIN_PAYMENT',
@@ -63,8 +91,15 @@ function App() {
     address: scan4MeContractAddress,
     abi: scan4MeAbi,
     functionName: 'requests',
-    args: [BigInt(requestId || '0')],
+    args: [requestIdValue],
   })
+
+  useEffect(() => {
+    if (!hasSelectedRequest) return
+    if (!requestData) return
+
+    void refetchRequest()
+  }, [hasSelectedRequest, requestData, refetchRequest])
 
   const { writeContract, data: hash, isPending, error: writeError } =
     useWriteContract()
@@ -73,8 +108,6 @@ function App() {
     useWaitForTransactionReceipt({ hash })
 
   const txBusy = isPending || isConfirming
-
-  const canUseContract = useMemo(() => Boolean(scan4MeContractAddress), [])
 
   const createRequest = () => {
     if (!location || !paymentEth) return
@@ -88,12 +121,90 @@ function App() {
     })
   }
 
+  const loadRequests = async () => {
+    if (!publicClient || nextRequestId == null) return
+
+    setLoadingRequests(true)
+    setRequestsError('')
+
+    try {
+      const total = BigInt(nextRequestId.toString())
+
+      if (total === 0n) {
+        setAvailableRequests([])
+        setRequestId('')
+        return
+      }
+
+      const readRequest = async (id: bigint) => {
+        const data = await publicClient.readContract({
+          address: scan4MeContractAddress,
+          abi: scan4MeAbi,
+          functionName: 'requests',
+          args: [id],
+        })
+
+        return data as unknown as ContractRequest
+      }
+
+      // Guard for contracts that start IDs at 1 instead of 0.
+      const firstZero = await readRequest(0n).catch(() => null)
+      const firstOne = total > 0n ? await readRequest(1n).catch(() => null) : null
+
+      const oneBased = !firstZero?.exists && Boolean(firstOne?.exists)
+      const startId = oneBased ? 1n : 0n
+      const endId = oneBased ? total : total - 1n
+
+      if (endId < startId) {
+        setAvailableRequests([])
+        setRequestId('')
+        return
+      }
+
+      const ids: bigint[] = []
+      for (let id = startId; id <= endId; id += 1n) {
+        ids.push(id)
+      }
+
+      const loaded = await Promise.allSettled(
+        ids.map(async (id) => {
+          const data = await readRequest(id)
+          return { id, data }
+        }),
+      )
+
+      const results = loaded
+        .filter(
+          (
+            result,
+          ): result is PromiseFulfilledResult<{
+            id: bigint
+            data: ContractRequest
+          }> => result.status === 'fulfilled',
+        )
+        .map((result) => result.value)
+        .filter((item) => item.data.exists)
+
+      setAvailableRequests(results)
+      setRequestId('')
+    } catch (err) {
+      setRequestsError(
+        err instanceof Error ? err.message : 'Failed to load requests.',
+      )
+    } finally {
+      setLoadingRequests(false)
+    }
+  }
+
+  const selectedRequest = hasSelectedRequest ? requestData : undefined
+  const isSelectedRequestAccepted = Boolean(selectedRequest?.accepted)
+
   const acceptRequest = () => {
     writeContract({
       address: scan4MeContractAddress,
       abi: scan4MeAbi,
       functionName: 'acceptRequest',
-      args: [BigInt(requestId)],
+      args: [requestIdValue],
     })
   }
 
@@ -104,7 +215,7 @@ function App() {
       address: scan4MeContractAddress,
       abi: scan4MeAbi,
       functionName: 'submitScan',
-      args: [BigInt(requestId), scanDataUri],
+      args: [requestIdValue, scanDataUri],
     })
   }
 
@@ -113,16 +224,7 @@ function App() {
       address: scan4MeContractAddress,
       abi: scan4MeAbi,
       functionName: 'requestVerification',
-      args: [BigInt(requestId)],
-    })
-  }
-
-  const cancelRequest = () => {
-    writeContract({
-      address: scan4MeContractAddress,
-      abi: scan4MeAbi,
-      functionName: 'cancelRequest',
-      args: [BigInt(requestId)],
+      args: [requestIdValue],
     })
   }
 
@@ -131,7 +233,7 @@ function App() {
       address: scan4MeContractAddress,
       abi: scan4MeAbi,
       functionName: 'withdrawScannerPayment',
-      args: [BigInt(requestId)],
+      args: [requestIdValue],
     })
   }
 
@@ -140,27 +242,7 @@ function App() {
       address: scan4MeContractAddress,
       abi: scan4MeAbi,
       functionName: 'revertToOpen',
-      args: [BigInt(requestId)],
-    })
-  }
-
-  const setMode = () => {
-    writeContract({
-      address: scan4MeContractAddress,
-      abi: scan4MeAbi,
-      functionName: 'setTestingMode',
-      args: [testingMode],
-    })
-  }
-
-  const setMockTimeOnChain = () => {
-    if (!mockTime) return
-
-    writeContract({
-      address: scan4MeContractAddress,
-      abi: scan4MeAbi,
-      functionName: 'setMockTime',
-      args: [BigInt(mockTime)],
+      args: [requestIdValue],
     })
   }
 
@@ -195,15 +277,15 @@ function App() {
           </div>
 
           <div className="stat">
-            <strong>Next request ID</strong>
-            <span>{loadingNextRequestId ? 'Loading...' : nextRequestId?.toString() ?? '0'}</span>
+            <strong>Next request ID: </strong>
+            <span>
+              {loadingNextRequestId ? 'Loading...' : nextRequestId?.toString() ?? '0'}
+            </span>
           </div>
 
           <div className="stat">
-            <strong>Min payment</strong>
-            <span>
-              {minPayment ? `${Number(minPayment) / 1e18} ETH` : 'Loading...'}
-            </span>
+            <strong>Min payment: </strong>
+            <span>{minPayment ? `${formatEther(minPayment)} ETH` : 'Loading...'}</span>
           </div>
         </aside>
       </section>
@@ -213,38 +295,55 @@ function App() {
           <h2>Create request</h2>
 
           <div className="form">
-            <input
-              value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              placeholder="Location"
-            />
+            <label className="field">
+              <span className="field-label">Location Desired</span>
+              <input
+                className="field-control"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+              />
+            </label>
 
-            <select
-              value={scanType}
-              onChange={(e) => setScanType(Number(e.target.value))}
+            <label className="field">
+              <span className="field-label">Scan type</span>
+              <select
+                className="field-control"
+                value={scanType}
+                onChange={(e) => setScanType(Number(e.target.value))}
+              >
+                {scanTypeOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field">
+              <span className="field-label">How many scans required?</span>
+              <input
+                className="field-control"
+                type="number"
+                min="1"
+                value={requiredScans}
+                onChange={(e) => setRequiredScans(Number(e.target.value))}
+              />
+            </label>
+
+            <label className="field">
+              <span className="field-label">Payment in ETH</span>
+              <input
+                className="field-control"
+                value={paymentEth}
+                onChange={(e) => setPaymentEth(e.target.value)}
+              />
+            </label>
+
+            <button
+              type="button"
+              onClick={createRequest}
+              disabled={!isConnected || txBusy}
             >
-              {scanTypeOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-
-            <input
-              type="number"
-              min="1"
-              value={requiredScans}
-              onChange={(e) => setRequiredScans(Number(e.target.value))}
-              placeholder="Required scans"
-            />
-
-            <input
-              value={paymentEth}
-              onChange={(e) => setPaymentEth(e.target.value)}
-              placeholder="Payment in ETH"
-            />
-
-            <button type="button" onClick={createRequest} disabled={!isConnected || txBusy}>
               {isPending ? 'Submitting...' : 'Create request'}
             </button>
           </div>
@@ -254,87 +353,171 @@ function App() {
           <h2>Request actions</h2>
 
           <div className="form">
-            <input
-              value={requestId}
-              onChange={(e) => setRequestId(e.target.value)}
-              placeholder="Request ID"
-            />
+            <button
+              type="button"
+              onClick={loadRequests}
+              disabled={!isConnected || loadingRequests}
+            >
+              {loadingRequests ? 'Loading requests...' : 'Load requests'}
+            </button>
 
-            <input
-              value={scanDataUri}
-              onChange={(e) => setScanDataUri(e.target.value)}
-              placeholder="Scan data URI"
-            />
+            {requestsError ? <p className="tx error">{requestsError}</p> : null}
 
-            <div className="button-row">
-             <button type="button" onClick={() => refetchRequest()}>Load request</button>
-              <button type="button" onClick={acceptRequest} disabled={!isConnected || txBusy}>
-                Accept
-              </button>
-              <button type="button" onClick={submitScan} disabled={!isConnected || txBusy}>
-                Submit scan
-              </button>
-              <button type="button" onClick={requestVerification} disabled={!isConnected || txBusy}>
-                Verify
-              </button>
-              <button type="button" onClick={cancelRequest} disabled={!isConnected || txBusy}>
-                Cancel
-              </button>
-              <button type="button" onClick={withdrawScannerPayment} disabled={!isConnected || txBusy}>
-                Withdraw
-              </button>
-              <button type="button" onClick={revertToOpen} disabled={!isConnected || txBusy}>
-                Reopen
-              </button>
-            </div>
+            {availableRequests.length > 0 ? (
+              <div className="request-list">
+                {availableRequests.map((item) => {
+                  const selected = requestId === item.id.toString()
+
+                  return (
+                    <button
+                      key={item.id.toString()}
+                      type="button"
+                      className={`request-item ${selected ? 'request-item-active' : ''}`}
+                      onClick={() => setRequestId(item.id.toString())}
+                    >
+                      <div className="request-item-top">
+                        <strong>Request #{item.id.toString()}</strong>
+                        <span>{item.data.accepted ? 'Accepted' : 'Open'}</span>
+                      </div>
+                      <div className="request-item-meta">
+                        <span>{item.data.location || 'No location set'}</span>
+                        <span>Scans: {item.data.requiredScans.toString()}</span>
+                        <span>Submissions: {item.data.submissions.toString()}</span>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
+
+            {hasSelectedRequest ? (
+              <>
+                {!isSelectedRequestAccepted ? (
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      onClick={acceptRequest}
+                      disabled={!isConnected || txBusy}
+                    >
+                      Accept request
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setRequestId('')}
+                      disabled={txBusy}
+                    >
+                      Back to list
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <label className="field">
+                      <span className="field-label">Scan data URI</span>
+                      <input
+                        className="field-control"
+                        value={scanDataUri}
+                        onChange={(e) => setScanDataUri(e.target.value)}
+                        placeholder="ipfs://... or data URI"
+                      />
+                    </label>
+
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        onClick={submitScan}
+                        disabled={!isConnected || txBusy || !scanDataUri}
+                      >
+                        Submit scan
+                      </button>
+                      <button
+                        type="button"
+                        onClick={requestVerification}
+                        disabled={!isConnected || txBusy}
+                      >
+                        Verify
+                      </button>
+                      <button
+                        type="button"
+                        onClick={withdrawScannerPayment}
+                        disabled={!isConnected || txBusy}
+                      >
+                        Withdraw
+                      </button>
+                      <button
+                        type="button"
+                        onClick={revertToOpen}
+                        disabled={!isConnected || txBusy}
+                      >
+                        Reopen
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRequestId('')}
+                        disabled={txBusy}
+                      >
+                        Back to list
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            ) : (
+              <p className="tx">Load requests, then click one request to continue.</p>
+            )}
           </div>
         </article>
 
         <article className="card">
           <h2>Request preview</h2>
-          {requestData ? (
+          {selectedRequest ? (
             <div className="preview">
-              <p><strong>Exists:</strong> {String(requestData.exists)}</p>
-              <p><strong>Requestor:</strong> {requestData.requestor}</p>
-              <p><strong>Location:</strong> {requestData.location}</p>
-              <p><strong>Scan type:</strong> {requestData.scanType.toString()}</p>
-              <p><strong>Payment:</strong> {requestData.payment.toString()}</p>
-              <p><strong>Scanner:</strong> {requestData.scanner}</p>
-              <p><strong>Fulfilled:</strong> {String(requestData.fulfilled)}</p>
-              <p><strong>Accepted:</strong> {String(requestData.accepted)}</p>
-              <p><strong>Verification:</strong> {requestData.verificationStatus.toString()}</p>
-              <p><strong>Scan URI:</strong> {requestData.scanDataUri}</p>
-              <p><strong>Required scans:</strong> {requestData.requiredScans.toString()}</p>
-              <p><strong>Submissions:</strong> {requestData.submissions.toString()}</p>
+              <p>
+                <strong>Exists:</strong> {String(selectedRequest.exists)}
+              </p>
+              <p>
+                <strong>Requestor:</strong> {selectedRequest.requestor}
+              </p>
+              <p>
+                <strong>Location:</strong> {selectedRequest.location}
+              </p>
+              <p>
+                <strong>Scan type:</strong> {selectedRequest.scanType.toString()}
+              </p>
+              <p>
+                <strong>Payment:</strong> {selectedRequest.payment.toString()}
+              </p>
+              <p>
+                <strong>Scanner:</strong> {selectedRequest.scanner}
+              </p>
+              <p>
+                <strong>Fulfilled:</strong> {String(selectedRequest.fulfilled)}
+              </p>
+              <p>
+                <strong>Accepted:</strong> {String(selectedRequest.accepted)}
+              </p>
+              <p>
+                <strong>Verification:</strong>{' '}
+                {selectedRequest.verificationStatus.toString()}
+              </p>
+              <p>
+                <strong>Scan URI:</strong> {selectedRequest.scanDataUri || '—'}
+              </p>
+              <p>
+                <strong>Required scans:</strong>{' '}
+                {selectedRequest.requiredScans.toString()}
+              </p>
+              <p>
+                <strong>Submissions:</strong>{' '}
+                {selectedRequest.submissions.toString()}
+              </p>
+              <p>
+                <strong>Scanner paid:</strong> {String(selectedRequest.scannerPaid)}
+              </p>
             </div>
           ) : (
-            <p>Load a request to inspect it.</p>
+            <p>Select a loaded request to inspect it.</p>
           )}
-        </article>
-
-        <article className="card">
-          <h2>Admin / test tools</h2>
-
-          <div className="form">
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                onClick={setMode}
-                onChange={(e) => setTestingMode(e.target.checked)}
-              />
-              Testing mode
-            </label>
-
-            <input
-              value={mockTime}
-              onChange={(e) => setMockTime(e.target.value)}
-              placeholder="Mock time (unix seconds)"
-            />
-
-            <button type="button" onClick={setMockTimeOnChain} disabled={!isConnected || txBusy}>
-              Set mock time
-            </button>
-          </div>
         </article>
       </section>
 
