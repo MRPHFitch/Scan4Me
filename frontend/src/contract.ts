@@ -281,3 +281,10 @@ export const scan4MeAbi = [
     anonymous: false,
   },
 ] as const
+
+// import scan4MeAbiJson from './scan4me-abi.json'
+
+// export const scan4MeContractAddress = import.meta.env
+//   .VITE_SCAN4ME_CONTRACT_ADDRESS as `0x${string}`
+
+// export const scan4MeAbi = scan4MeAbiJson

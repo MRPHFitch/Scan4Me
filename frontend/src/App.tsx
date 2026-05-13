@@ -47,7 +47,7 @@ function App() {
   const [location, setLocation] = useState('')
   const [scanType, setScanType] = useState<number>(0)
   const [requiredScans, setRequiredScans] = useState(1)
-  const [paymentEth, setPaymentEth] = useState('0.01')
+  const [paymentEth, setPaymentEth] = useState('0.45')
 
   const [requestId, setRequestId] = useState('')
   const [scanDataUri, setScanDataUri] = useState('')
