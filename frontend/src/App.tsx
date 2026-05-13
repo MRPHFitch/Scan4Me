@@ -20,6 +20,23 @@ function shortLocation(location: string) {
   return location.trim().split(/\s+/)[0] || 'Request'
 }
 
+function getRevertReason(error: unknown) {
+  if (typeof error !== 'object' || error === null) {
+    return 'Transaction failed.'
+  }
+
+  const e = error as {
+    shortMessage?: string
+    message?: string
+    details?: string
+  }
+
+  const text = e.shortMessage ?? e.details ?? e.message ?? 'Transaction failed.'
+
+  const match = text.match(/reason:\s*(.*?)(?:\s*Contract Call:|$)/s)
+  return match?.[1]?.trim() ?? text.trim()
+}
+
 const scanTypeOptions = [
   { label: 'PHOTO_360', value: 0 },
   { label: 'LIDAR', value: 1 },
@@ -316,7 +333,7 @@ function App() {
         args: [requestIdValue],
       })
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Transaction failed.')
+      setActionError(getRevertReason(err))
     }
   }
 
@@ -497,7 +514,7 @@ function App() {
             </button>
             {requestsError ? <p className="tx error">{requestsError}</p> : null}
             {actionError ? <p className="tx error">{actionError}</p> : null}
-            {writeError ? <p className="tx error">{writeError.message}</p> : null}
+            {writeError ? <p className="tx error">{getRevertReason(writeError)}</p> : null}
             {availableRequests.length > 0 ? (
               <div className="request-list">
                 {availableRequests.map((item) => {
@@ -658,11 +675,22 @@ function App() {
         </article>
       </section>
 
-      {hash ? <p className="tx">Tx hash: {hash}</p> : null}
-      {isConfirmed ? <p className="tx success">Transaction confirmed.</p> : null}
-      {writeError ? <p className="tx error">Transaction failed.</p> : null}
+      {hash || isConfirmed || writeError || !canUseContract ? (
+        <section className="card status-card">
+          <h2>Status</h2>
 
-      {!canUseContract ? <p className="tx error">Missing contract address.</p> : null}
+          {hash ? <p className="tx">Tx hash: {hash}</p> : null}
+          {isConfirmed ? <p className="tx success">Transaction confirmed.</p> : null}
+          {writeError ? (
+            <p className="tx error">
+              {getRevertReason(writeError)}
+            </p>
+          ) : null}
+          {!canUseContract ? (
+            <p className="tx error">Missing contract address.</p>
+          ) : null}
+        </section>
+      ) : null}
     </main>
   )
 }
