@@ -82,13 +82,13 @@ function App() {
   const [uploadError, setUploadError] = useState('')
   const [actionError, setActionError] = useState('')
   const { writeContract, data: hash, isPending, error: writeError } = useWriteContract()
-  const clearStatus = useCallback(() => {setActionError('')}, [])
+  const clearStatus = useCallback(() => { setActionError('') }, [])
   // const selectedRequestItem =
   // availableRequests.find((item) => item.id.toString() === requestId) ?? null
   // const otherRequests = availableRequests.filter(
   // (item) => item.id.toString() !== requestId,
-// )
-  
+  // )
+
 
   function getScanTypeLabel(value: number) {
     return scanTypeOptions.find((opt) => opt.value === value)?.label ?? String(value)
@@ -277,9 +277,9 @@ function App() {
   const isSelectedRequestAccepted = Boolean(selectedRequest?.accepted)
   const requestor = selectedRequest?.requestor?.toLowerCase()
   const scanner = selectedRequest?.scanner?.toLowerCase()
-//   const selectedRequestItem = availableRequests.find(
-//   (item) => item.id.toString() === requestId,
-// )
+  const selectedRequestItem = availableRequests.find(
+    (item) => item.id.toString() === requestId,
+  )
 
   const isViewerRequestor = viewer && requestor && viewer === requestor
   const isViewerScanner = viewer && scanner && viewer === scanner
@@ -404,38 +404,38 @@ function App() {
     })
   }
 
-//   function RequestCard({
-//   item,
-//   selected,
-//   onSelect,
-//   children,
-// }: {
-//   item: RequestItemType
-//   selected?: boolean
-//   onSelect: () => void
-//   children?: React.ReactNode
-// }) {
-//   return (
-//     <button
-//       type="button"
-//       className={`request-item ${selected ? 'request-item-active' : ''}`}
-//       onClick={onSelect}
-//     >
-//       <div className="request-item-top">
-//         <strong>Request {shortLocation(item.data.location)}</strong>
-//         <span>{item.data.accepted ? 'Accepted' : 'Open'}</span>
-//       </div>
+  //   function RequestCard({
+  //   item,
+  //   selected,
+  //   onSelect,
+  //   children,
+  // }: {
+  //   item: RequestItemType
+  //   selected?: boolean
+  //   onSelect: () => void
+  //   children?: React.ReactNode
+  // }) {
+  //   return (
+  //     <button
+  //       type="button"
+  //       className={`request-item ${selected ? 'request-item-active' : ''}`}
+  //       onClick={onSelect}
+  //     >
+  //       <div className="request-item-top">
+  //         <strong>Request {shortLocation(item.data.location)}</strong>
+  //         <span>{item.data.accepted ? 'Accepted' : 'Open'}</span>
+  //       </div>
 
-//       <div className="request-item-meta">
-//         <span>{item.data.location || 'No location set'}</span>
-//         <span>Scans: {item.data.requiredScans.toString()}</span>
-//         <span>Submissions: {item.data.submissions.toString()}</span>
-//       </div>
+  //       <div className="request-item-meta">
+  //         <span>{item.data.location || 'No location set'}</span>
+  //         <span>Scans: {item.data.requiredScans.toString()}</span>
+  //         <span>Submissions: {item.data.submissions.toString()}</span>
+  //       </div>
 
-//       {children ? <div className="request-item-actions">{children}</div> : null}
-//     </button>
-//   )
-// }
+  //       {children ? <div className="request-item-actions">{children}</div> : null}
+  //     </button>
+  //   )
+  // }
 
   return (
     <main className="shell">
@@ -551,53 +551,79 @@ function App() {
 
         <article className="card">
           <h2>Request actions</h2>
-
           <div className="form">
-            <button
-              type="button"
-              onClick={loadRequests}
-              disabled={!isConnected || loadingRequests}
-            >
-              {loadingRequests ? 'Loading requests...' : 'Load requests'}
-            </button>
             {requestsError ? <p className="tx error">{requestsError}</p> : null}
             {actionError ? <p className="tx error">{actionError}</p> : null}
-            {writeError ? <p className="tx error">{getRevertReason(writeError)}</p> : null}
-            {availableRequests.length > 0 ? (
-              <div className="request-list">
-                {availableRequests.map((item) => {
-                  const selected = requestId === item.id.toString()
-
-                  return (
-                    <button
-                      key={item.id.toString()}
-                      type="button"
-                      className={`request-item ${selected ? 'request-item-active' : ''
-                        }`}
-                      onClick={() => setRequestId(item.id.toString())}
-                    >
-                      <div className="request-item-top">
-                        <strong>Request {shortLocation(item.data.location)}</strong>
-                        <span>{item.data.accepted ? 'Accepted' : 'Open'}</span>
-                      </div>
-                      <div className="request-item-meta">
-                        <span>{item.data.location || 'No location set'}</span>
-                        <span>Scans: {item.data.requiredScans.toString()}</span>
-                        <span>Submissions: {item.data.submissions.toString()}</span>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
+            {writeError ? (
+              <p className="tx error">{getRevertReason(writeError)}</p>
             ) : null}
-
-            {hasSelectedRequest ? (
+            {!hasSelectedRequest ? (
               <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearStatus()
+                    void loadRequests()
+                  }}
+                  disabled={!isConnected || loadingRequests}
+                >
+                  {loadingRequests ? 'Loading requests...' : 'Load requests'}
+                </button>
+                {availableRequests.length > 0 ? (
+                  <div className="request-list">
+                    {availableRequests.map((item) => {
+                      const selected = requestId === item.id.toString()
+
+                      return (
+                        <button
+                          key={item.id.toString()}
+                          type="button"
+                          className={`request-item ${selected ? 'request-item-active' : ''}`}
+                          onClick={() => setRequestId(item.id.toString())}
+                        >
+                          <div className="request-item-top">
+                            <strong>Request {shortLocation(item.data.location)}</strong>
+                            <span>{item.data.accepted ? 'Accepted' : 'Open'}</span>
+                          </div>
+                          <div className="request-item-meta">
+                            <span>{item.data.location || 'No location set'}</span>
+                            <span>Scans: {item.data.requiredScans.toString()}</span>
+                            <span>Submissions: {item.data.submissions.toString()}</span>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                ) : null}
+              </>
+            ) : selectedRequestItem ? (
+              <>
+                <div className="request-list">
+                  <button
+                    type="button"
+                    className="request-item request-item-active"
+                    onClick={() => setRequestId(selectedRequestItem.id.toString())}
+                  >
+                    <div className="request-item-top">
+                      <strong>Request {shortLocation(selectedRequestItem.data.location)}</strong>
+                      <span>{selectedRequestItem.data.accepted ? 'Accepted' : 'Open'}</span>
+                    </div>
+                    <div className="request-item-meta">
+                      <span>{selectedRequestItem.data.location || 'No location set'}</span>
+                      <span>Scans: {selectedRequestItem.data.requiredScans.toString()}</span>
+                      <span>Submissions: {selectedRequestItem.data.submissions.toString()}</span>
+                    </div>
+                  </button>
+                </div>
+
                 {!isSelectedRequestAccepted ? (
                   <div className="button-row">
                     <button
                       type="button"
-                      onClick={acceptRequest}
+                      onClick={() => {
+                        clearStatus()
+                        void acceptRequest()
+                      }}
                       disabled={!isConnected || txBusy}
                     >
                       Accept request
@@ -605,7 +631,10 @@ function App() {
 
                     <button
                       type="button"
-                      onClick={() => setRequestId('')}
+                      onClick={() => {
+                        clearStatus()
+                        setRequestId('')
+                      }}
                       disabled={txBusy}
                     >
                       Back to list
@@ -619,48 +648,67 @@ function App() {
                         className="field-control"
                         type="file"
                         accept="image/*,video/*,.las,.laz,.ply,.pcd,.e57,.obj,.glb,.gltf,.zip"
-                        onChange={(e) => setScanFile(e.target.files?.[0] ?? null)}
+                        onChange={(e) => {
+                          clearStatus()
+                          setScanFile(e.target.files?.[0] ?? null)
+                        }}
                       />
                     </label>
 
-                    {scanFile ? (
-                      <p className="tx">Selected file: {scanFile.name}</p>
-                    ) : null}
-
+                    {scanFile ? <p className="tx">Selected file: {scanFile.name}</p> : null}
                     {uploadError ? <p className="tx error">{uploadError}</p> : null}
 
                     <div className="button-row">
                       <button
                         type="button"
-                        onClick={submitScan}
+                        onClick={() => {
+                          clearStatus()
+                          void submitScan()
+                        }}
                         disabled={!isConnected || txBusy || uploadingScan || !scanFile}
                       >
                         {uploadingScan ? 'Uploading...' : 'Submit scan'}
                       </button>
+
                       <button
                         type="button"
-                        onClick={requestVerification}
+                        onClick={() => {
+                          clearStatus()
+                          void requestVerification()
+                        }}
                         disabled={!isConnected || txBusy}
                       >
                         Verify
                       </button>
+
                       <button
                         type="button"
-                        onClick={withdrawScannerPayment}
+                        onClick={() => {
+                          clearStatus()
+                          void withdrawScannerPayment()
+                        }}
                         disabled={!isConnected || txBusy}
                       >
                         Withdraw
                       </button>
+
                       <button
                         type="button"
-                        onClick={revertToOpen}
+                        onClick={() => {
+                          clearStatus()
+                          void revertToOpen()
+                        }}
                         disabled={!isConnected || txBusy}
                       >
                         Reopen
                       </button>
+
                       <button
                         type="button"
-                        onClick={() => setRequestId('')}
+                        onClick={() => {
+                          clearStatus()
+                          setRequestId('')
+                        }}
                         disabled={txBusy}
                       >
                         Back to list
@@ -669,9 +717,7 @@ function App() {
                   </>
                 )}
               </>
-            ) : (
-              <p className="tx">Load requests, then click one request to continue.</p>
-            )}
+            ) : null}
           </div>
         </article>
 
