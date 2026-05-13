@@ -1,5 +1,5 @@
 import { ConnectButton } from '@rainbow-me/rainbowkit'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import {
   useAccount,
   usePublicClient,
@@ -55,15 +55,17 @@ function App() {
   const [requiredScans, setRequiredScans] = useState(1)
   const [ethPriceUsd, setEthPriceUsd] = useState<number | null>(null)
   const [paymentEth, setPaymentEth] = useState('0.045')
-
   const [requestId, setRequestId] = useState('')
-  const [scanDataUri, setScanDataUri] = useState('')
-
   const [availableRequests, setAvailableRequests] = useState<
     Array<{ id: bigint; data: ContractRequest }>
   >([])
   const [loadingRequests, setLoadingRequests] = useState(false)
   const [requestsError, setRequestsError] = useState('')
+  const [scanFile, setScanFile] = useState<File | null>(null)
+  const [uploadingScan, setUploadingScan] = useState(false)
+  const [uploadError, setUploadError] = useState('')
+  const [actionError, setActionError] = useState('')
+  const { writeContract, data: hash, isPending, error: writeError } = useWriteContract()
 
   function getScanTypeLabel(value: number) {
     return scanTypeOptions.find((opt) => opt.value === value)?.label ?? String(value)
@@ -86,6 +88,26 @@ function App() {
     }
   }
 
+  async function uploadFileToIpfs(file: File): Promise<string> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const res = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${import.meta.env.VITE_PINATA_JWT}`,
+      },
+      body: formData,
+    })
+
+    if (!res.ok) {
+      throw new Error(`IPFS upload failed: ${res.statusText}`)
+    }
+
+    const json = await res.json()
+    return `ipfs://${json.IpfsHash}`
+  }
+
   const requestIdValue = (() => {
     try {
       return BigInt(requestId || '0')
@@ -97,7 +119,7 @@ function App() {
   const hasSelectedRequest = requestId !== ''
   const canUseContract = Boolean(scan4MeContractAddress)
   const viewer = address?.toLowerCase()
-  
+
 
   const {
     data: nextRequestIdData,
@@ -135,9 +157,6 @@ function App() {
     void refetchRequest()
   }, [hasSelectedRequest, requestIdValue, refetchRequest])
 
-  const { writeContract, data: hash, isPending, error: writeError } =
-    useWriteContract()
-
   const { isLoading: isConfirming, isSuccess: isConfirmed } =
     useWaitForTransactionReceipt({ hash })
 
@@ -155,70 +174,80 @@ function App() {
     })
   }
 
-  const loadRequests = async () => {
-  if (!publicClient) {
-    setRequestsError('No public client available.')
-    return
-  }
-
-  if (nextRequestId == null) {
-    setRequestsError('nextRequestId not loaded yet.')
-    return
-  }
-
-  try {
-    setLoadingRequests(true)
-    setRequestsError('')
-
-    const total = nextRequestId
-
-    if (total === 0n) {
-      setAvailableRequests([])
-      setRequestId('')
+  const loadRequests = useCallback(async () => {
+    if (!publicClient) {
+      setRequestsError('No public client available.')
       return
     }
 
-    const ids: bigint[] = []
-    for (let id = 0n; id < total; id += 1n) {
-      ids.push(id)
+    if (nextRequestId == null) {
+      setRequestsError('nextRequestId not loaded yet.')
+      return
     }
 
-    const loaded = await Promise.allSettled(
-      ids.map(async (id) => {
-        const data = await publicClient.readContract({
-          address: scan4MeContractAddress,
-          abi: scan4MeAbi,
-          functionName: 'getRequest',
-          args: [id],
-        })
+    try {
+      setLoadingRequests(true)
+      setRequestsError('')
 
-        return { id, data: data as ContractRequest }
-      }),
-    )
+      const total = nextRequestId
 
-    const results = loaded
-      .filter(
-        (
-          result,
-        ): result is PromiseFulfilledResult<{
-          id: bigint
-          data: ContractRequest
-        }> => result.status === 'fulfilled',
+      if (total === 0n) {
+        setAvailableRequests([])
+        setRequestId('')
+        return
+      }
+
+      const ids: bigint[] = []
+      for (let id = 0n; id < total; id += 1n) {
+        ids.push(id)
+      }
+
+      const loaded = await Promise.allSettled(
+        ids.map(async (id) => {
+          const data = await publicClient.readContract({
+            address: scan4MeContractAddress,
+            abi: scan4MeAbi,
+            functionName: 'getRequest',
+            args: [id],
+          })
+
+          return { id, data: data as ContractRequest }
+        }),
       )
-      .map((result) => result.value)
-      .filter((item) => item.data.exists)
-      .sort((a, b) => Number(b.id - a.id))
 
-    setAvailableRequests(results)
-    setRequestId('')
-  } catch (err) {
-    setRequestsError(
-      err instanceof Error ? err.message : 'Failed to load requests.',
-    )
-  } finally {
-    setLoadingRequests(false)
-  }
-}
+      const results = loaded
+        .filter(
+          (
+            result,
+          ): result is PromiseFulfilledResult<{
+            id: bigint
+            data: ContractRequest
+          }> => result.status === 'fulfilled',
+        )
+        .map((result) => result.value)
+        .filter((item) => item.data.exists)
+        .sort((a, b) => Number(b.id - a.id))
+
+      setAvailableRequests(results)
+      setRequestId('')
+    } catch (err) {
+      setRequestsError(
+        err instanceof Error ? err.message : 'Failed to load requests.',
+      )
+    } finally {
+      setLoadingRequests(false)
+    }
+  }, [publicClient, nextRequestId])
+  useEffect(() => {
+    if (!isConfirmed) return
+
+    const refresh = async () => {
+      await refetchRequest()
+      await loadRequests()
+    }
+
+    void refresh()
+  }, [isConfirmed, refetchRequest, loadRequests])
 
   const selectedRequest = hasSelectedRequest ? requestData : undefined
   const isSelectedRequestAccepted = Boolean(selectedRequest?.accepted)
@@ -231,17 +260,17 @@ function App() {
     Boolean(selectedRequest?.accepted) && (isViewerRequestor || isViewerScanner)
 
   useEffect(() => {
-      const loadPrice = async () => {
-        try {
-          const res = await fetch(
-            'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd',
-          )
-          const json = await res.json()
-          setEthPriceUsd(json.ethereum.usd)
-        } catch {
-          setEthPriceUsd(null)
-        }
+    const loadPrice = async () => {
+      try {
+        const res = await fetch(
+          'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd',
+        )
+        const json = await res.json()
+        setEthPriceUsd(json.ethereum.usd)
+      } catch {
+        setEthPriceUsd(null)
       }
+    }
 
     void loadPrice()
   }, [])
@@ -262,26 +291,58 @@ function App() {
     : 0
 
   const selectedPaymentUsd =
-  ethPriceUsd != null ? selectedPaymentEth * ethPriceUsd : null
+    ethPriceUsd != null ? selectedPaymentEth * ethPriceUsd : null
 
-  const acceptRequest = () => {
-    writeContract({
-      address: scan4MeContractAddress,
-      abi: scan4MeAbi,
-      functionName: 'acceptRequest',
-      args: [requestIdValue],
-    })
+  const acceptRequest = async () => {
+    try {
+      setActionError('')
+      if (!publicClient || !address) {
+        setActionError('No client or wallet available.')
+        return
+      }
+
+      await publicClient?.simulateContract({
+        address: scan4MeContractAddress,
+        abi: scan4MeAbi,
+        functionName: 'acceptRequest',
+        args: [requestIdValue],
+        account: address,
+      })
+
+      writeContract({
+        address: scan4MeContractAddress,
+        abi: scan4MeAbi,
+        functionName: 'acceptRequest',
+        args: [requestIdValue],
+      })
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Transaction failed.')
+    }
   }
 
-  const submitScan = () => {
-    if (!scanDataUri) return
+  const submitScan = async () => {
+    if (!scanFile) {
+      setUploadError('Please choose a file first.')
+      return
+    }
 
-    writeContract({
-      address: scan4MeContractAddress,
-      abi: scan4MeAbi,
-      functionName: 'submitScan',
-      args: [requestIdValue, scanDataUri],
-    })
+    try {
+      setUploadingScan(true)
+      setUploadError('')
+
+      const ipfsUri = await uploadFileToIpfs(scanFile)
+
+      writeContract({
+        address: scan4MeContractAddress,
+        abi: scan4MeAbi,
+        functionName: 'submitScan',
+        args: [requestIdValue, ipfsUri],
+      })
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Upload failed.')
+    } finally {
+      setUploadingScan(false)
+    }
   }
 
   const requestVerification = () => {
@@ -411,7 +472,7 @@ function App() {
                 {createPaymentUsd != null ? ` (${formatUsd(createPaymentUsd)})` : ''}
               </p>
             </label>
-             
+
 
             <button
               type="button"
@@ -434,9 +495,9 @@ function App() {
             >
               {loadingRequests ? 'Loading requests...' : 'Load requests'}
             </button>
-
             {requestsError ? <p className="tx error">{requestsError}</p> : null}
-
+            {actionError ? <p className="tx error">{actionError}</p> : null}
+            {writeError ? <p className="tx error">{writeError.message}</p> : null}
             {availableRequests.length > 0 ? (
               <div className="request-list">
                 {availableRequests.map((item) => {
@@ -446,9 +507,8 @@ function App() {
                     <button
                       key={item.id.toString()}
                       type="button"
-                      className={`request-item ${
-                        selected ? 'request-item-active' : ''
-                      }`}
+                      className={`request-item ${selected ? 'request-item-active' : ''
+                        }`}
                       onClick={() => setRequestId(item.id.toString())}
                     >
                       <div className="request-item-top">
@@ -489,22 +549,28 @@ function App() {
                 ) : (
                   <>
                     <label className="field">
-                      <span className="field-label">Scan data URI</span>
+                      <span className="field-label">Upload scan file</span>
                       <input
                         className="field-control"
-                        value={scanDataUri}
-                        onChange={(e) => setScanDataUri(e.target.value)}
-                        placeholder="ipfs://... or data URI"
+                        type="file"
+                        accept="image/*,video/*,.las,.laz,.ply,.pcd,.e57,.obj,.glb,.gltf,.zip"
+                        onChange={(e) => setScanFile(e.target.files?.[0] ?? null)}
                       />
                     </label>
+
+                    {scanFile ? (
+                      <p className="tx">Selected file: {scanFile.name}</p>
+                    ) : null}
+
+                    {uploadError ? <p className="tx error">{uploadError}</p> : null}
 
                     <div className="button-row">
                       <button
                         type="button"
                         onClick={submitScan}
-                        disabled={!isConnected || txBusy || !scanDataUri}
+                        disabled={!isConnected || txBusy || uploadingScan || !scanFile}
                       >
-                        Submit scan
+                        {uploadingScan ? 'Uploading...' : 'Submit scan'}
                       </button>
                       <button
                         type="button"
