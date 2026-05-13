@@ -83,11 +83,6 @@ function App() {
   const [actionError, setActionError] = useState('')
   const { writeContract, data: hash, isPending, error: writeError } = useWriteContract()
   const clearStatus = useCallback(() => { setActionError('') }, [])
-  // const selectedRequestItem =
-  // availableRequests.find((item) => item.id.toString() === requestId) ?? null
-  // const otherRequests = availableRequests.filter(
-  // (item) => item.id.toString() !== requestId,
-  // )
 
 
   function getScanTypeLabel(value: number) {
@@ -404,48 +399,16 @@ function App() {
     })
   }
 
-  //   function RequestCard({
-  //   item,
-  //   selected,
-  //   onSelect,
-  //   children,
-  // }: {
-  //   item: RequestItemType
-  //   selected?: boolean
-  //   onSelect: () => void
-  //   children?: React.ReactNode
-  // }) {
-  //   return (
-  //     <button
-  //       type="button"
-  //       className={`request-item ${selected ? 'request-item-active' : ''}`}
-  //       onClick={onSelect}
-  //     >
-  //       <div className="request-item-top">
-  //         <strong>Request {shortLocation(item.data.location)}</strong>
-  //         <span>{item.data.accepted ? 'Accepted' : 'Open'}</span>
-  //       </div>
-
-  //       <div className="request-item-meta">
-  //         <span>{item.data.location || 'No location set'}</span>
-  //         <span>Scans: {item.data.requiredScans.toString()}</span>
-  //         <span>Submissions: {item.data.submissions.toString()}</span>
-  //       </div>
-
-  //       {children ? <div className="request-item-actions">{children}</div> : null}
-  //     </button>
-  //   )
-  // }
-
   return (
     <main className="shell">
       <section className="hero">
         <div className="hero-copy">
           <p className="eyebrow">Scan4Me</p>
-          <h1>Create scan requests to turn the world into 3D.</h1>
+          <h1>Create scan requests. Help the digital world.</h1>
           <p className="lede">
-            A contract dashboard for creating scan jobs, accepting requests,
-            submitting scan data, and triggering verification.
+            Ask around the world for any scan required for your digital project.
+            Create the request and allow someone to accept it. Built in submission and verification features
+            streamline the process.
           </p>
 
           <div className="pill-row">
