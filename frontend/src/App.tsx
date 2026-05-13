@@ -16,6 +16,10 @@ function shortAddress(address?: string) {
   return `${address.slice(0, 6)}...${address.slice(-4)}`
 }
 
+function shortLocation(location: string) {
+  return location.trim().split(/\s+/)[0] || 'Request'
+}
+
 const scanTypeOptions = [
   { label: 'PHOTO_360', value: 0 },
   { label: 'LIDAR', value: 1 },
@@ -37,6 +41,8 @@ type ContractRequest = {
   scanDataUri: string
   requiredScans: bigint
   submissions: bigint
+  verificationRequestId: `0x${string}`
+  lastRejected: bigint
   scannerPaid: boolean
 }
 
@@ -47,7 +53,8 @@ function App() {
   const [location, setLocation] = useState('')
   const [scanType, setScanType] = useState<number>(0)
   const [requiredScans, setRequiredScans] = useState(1)
-  const [paymentEth, setPaymentEth] = useState('0.45')
+  const [ethPriceUsd, setEthPriceUsd] = useState<number | null>(null)
+  const [paymentEth, setPaymentEth] = useState('0.045')
 
   const [requestId, setRequestId] = useState('')
   const [scanDataUri, setScanDataUri] = useState('')
@@ -57,6 +64,27 @@ function App() {
   >([])
   const [loadingRequests, setLoadingRequests] = useState(false)
   const [requestsError, setRequestsError] = useState('')
+
+  function getScanTypeLabel(value: number) {
+    return scanTypeOptions.find((opt) => opt.value === value)?.label ?? String(value)
+  }
+
+  function getVerificationStatusLabel(value: number) {
+    switch (value) {
+      case 0:
+        return 'NotRequested'
+      case 1:
+        return 'Pending'
+      case 2:
+        return 'Approved'
+      case 3:
+        return 'Rejected'
+      case 4:
+        return 'Canceled'
+      default:
+        return String(value)
+    }
+  }
 
   const requestIdValue = (() => {
     try {
@@ -68,9 +96,11 @@ function App() {
 
   const hasSelectedRequest = requestId !== ''
   const canUseContract = Boolean(scan4MeContractAddress)
+  const viewer = address?.toLowerCase()
+  
 
   const {
-    data: nextRequestId,
+    data: nextRequestIdData,
     isLoading: loadingNextRequestId,
   } = useReadContract({
     address: scan4MeContractAddress,
@@ -78,28 +108,32 @@ function App() {
     functionName: 'nextRequestId',
   })
 
-  const { data: minPayment } = useReadContract({
+  const nextRequestId = nextRequestIdData as bigint | undefined
+
+  const { data: minPaymentData } = useReadContract({
     address: scan4MeContractAddress,
     abi: scan4MeAbi,
     functionName: 'MIN_PAYMENT',
   })
 
+  const minPayment = minPaymentData as bigint | undefined
+
   const {
-    data: requestData,
+    data: requestDataData,
     refetch: refetchRequest,
   } = useReadContract({
     address: scan4MeContractAddress,
     abi: scan4MeAbi,
-    functionName: 'requests',
+    functionName: 'getRequest',
     args: [requestIdValue],
   })
 
+  const requestData = requestDataData as ContractRequest | undefined
+
   useEffect(() => {
     if (!hasSelectedRequest) return
-    if (!requestData) return
-
     void refetchRequest()
-  }, [hasSelectedRequest, requestData, refetchRequest])
+  }, [hasSelectedRequest, requestIdValue, refetchRequest])
 
   const { writeContract, data: hash, isPending, error: writeError } =
     useWriteContract()
@@ -122,82 +156,113 @@ function App() {
   }
 
   const loadRequests = async () => {
-    if (!publicClient || nextRequestId == null) return
+  if (!publicClient) {
+    setRequestsError('No public client available.')
+    return
+  }
 
+  if (nextRequestId == null) {
+    setRequestsError('nextRequestId not loaded yet.')
+    return
+  }
+
+  try {
     setLoadingRequests(true)
     setRequestsError('')
 
-    try {
-      const total = BigInt(nextRequestId.toString())
+    const total = nextRequestId
 
-      if (total === 0n) {
-        setAvailableRequests([])
-        setRequestId('')
-        return
-      }
+    if (total === 0n) {
+      setAvailableRequests([])
+      setRequestId('')
+      return
+    }
 
-      const readRequest = async (id: bigint) => {
+    const ids: bigint[] = []
+    for (let id = 0n; id < total; id += 1n) {
+      ids.push(id)
+    }
+
+    const loaded = await Promise.allSettled(
+      ids.map(async (id) => {
         const data = await publicClient.readContract({
           address: scan4MeContractAddress,
           abi: scan4MeAbi,
-          functionName: 'requests',
+          functionName: 'getRequest',
           args: [id],
         })
 
-        return data as unknown as ContractRequest
-      }
+        return { id, data: data as ContractRequest }
+      }),
+    )
 
-      // Guard for contracts that start IDs at 1 instead of 0.
-      const firstZero = await readRequest(0n).catch(() => null)
-      const firstOne = total > 0n ? await readRequest(1n).catch(() => null) : null
-
-      const oneBased = !firstZero?.exists && Boolean(firstOne?.exists)
-      const startId = oneBased ? 1n : 0n
-      const endId = oneBased ? total : total - 1n
-
-      if (endId < startId) {
-        setAvailableRequests([])
-        setRequestId('')
-        return
-      }
-
-      const ids: bigint[] = []
-      for (let id = startId; id <= endId; id += 1n) {
-        ids.push(id)
-      }
-
-      const loaded = await Promise.allSettled(
-        ids.map(async (id) => {
-          const data = await readRequest(id)
-          return { id, data }
-        }),
+    const results = loaded
+      .filter(
+        (
+          result,
+        ): result is PromiseFulfilledResult<{
+          id: bigint
+          data: ContractRequest
+        }> => result.status === 'fulfilled',
       )
+      .map((result) => result.value)
+      .filter((item) => item.data.exists)
+      .sort((a, b) => Number(b.id - a.id))
 
-      const results = loaded
-        .filter(
-          (
-            result,
-          ): result is PromiseFulfilledResult<{
-            id: bigint
-            data: ContractRequest
-          }> => result.status === 'fulfilled',
-        )
-        .map((result) => result.value)
-        .filter((item) => item.data.exists)
-
-      setAvailableRequests(results)
-      setRequestId('')
-    } catch (err) {
-      setRequestsError(
-        err instanceof Error ? err.message : 'Failed to load requests.',
-      )
-    } finally {
-      setLoadingRequests(false)
-    }
+    setAvailableRequests(results)
+    setRequestId('')
+  } catch (err) {
+    setRequestsError(
+      err instanceof Error ? err.message : 'Failed to load requests.',
+    )
+  } finally {
+    setLoadingRequests(false)
   }
+}
 
   const selectedRequest = hasSelectedRequest ? requestData : undefined
   const isSelectedRequestAccepted = Boolean(selectedRequest?.accepted)
+  const requestor = selectedRequest?.requestor?.toLowerCase()
+  const scanner = selectedRequest?.scanner?.toLowerCase()
+
+  const isViewerRequestor = viewer && requestor && viewer === requestor
+  const isViewerScanner = viewer && scanner && viewer === scanner
+  const canSeePrivateDetails =
+    Boolean(selectedRequest?.accepted) && (isViewerRequestor || isViewerScanner)
+
+  useEffect(() => {
+      const loadPrice = async () => {
+        try {
+          const res = await fetch(
+            'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd',
+          )
+          const json = await res.json()
+          setEthPriceUsd(json.ethereum.usd)
+        } catch {
+          setEthPriceUsd(null)
+        }
+      }
+
+    void loadPrice()
+  }, [])
+
+  function formatUsd(value: number) {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(value)
+  }
+
+  const createPaymentEth = Number(paymentEth || 0)
+  const createPaymentUsd =
+    ethPriceUsd != null ? createPaymentEth * ethPriceUsd : null
+
+  const selectedPaymentEth = selectedRequest
+    ? Number(formatEther(selectedRequest.payment))
+    : 0
+
+  const selectedPaymentUsd =
+  ethPriceUsd != null ? selectedPaymentEth * ethPriceUsd : null
 
   const acceptRequest = () => {
     writeContract({
@@ -279,13 +344,17 @@ function App() {
           <div className="stat">
             <strong>Next request ID: </strong>
             <span>
-              {loadingNextRequestId ? 'Loading...' : nextRequestId?.toString() ?? '0'}
+              {loadingNextRequestId
+                ? 'Loading...'
+                : nextRequestId?.toString() ?? '0'}
             </span>
           </div>
 
           <div className="stat">
             <strong>Min payment: </strong>
-            <span>{minPayment ? `${formatEther(minPayment)} ETH` : 'Loading...'}</span>
+            <span>
+              {minPayment ? `${formatEther(minPayment)} ETH` : 'Loading...'}
+            </span>
           </div>
         </aside>
       </section>
@@ -337,7 +406,12 @@ function App() {
                 value={paymentEth}
                 onChange={(e) => setPaymentEth(e.target.value)}
               />
+              <p className="tx">
+                Estimated payment: {createPaymentEth.toFixed(4)} ETH
+                {createPaymentUsd != null ? ` (${formatUsd(createPaymentUsd)})` : ''}
+              </p>
             </label>
+             
 
             <button
               type="button"
@@ -372,11 +446,13 @@ function App() {
                     <button
                       key={item.id.toString()}
                       type="button"
-                      className={`request-item ${selected ? 'request-item-active' : ''}`}
+                      className={`request-item ${
+                        selected ? 'request-item-active' : ''
+                      }`}
                       onClick={() => setRequestId(item.id.toString())}
                     >
                       <div className="request-item-top">
-                        <strong>Request #{item.id.toString()}</strong>
+                        <strong>Request {shortLocation(item.data.location)}</strong>
                         <span>{item.data.accepted ? 'Accepted' : 'Open'}</span>
                       </div>
                       <div className="request-item-meta">
@@ -473,47 +549,42 @@ function App() {
           {selectedRequest ? (
             <div className="preview">
               <p>
-                <strong>Exists:</strong> {String(selectedRequest.exists)}
-              </p>
-              <p>
-                <strong>Requestor:</strong> {selectedRequest.requestor}
-              </p>
-              <p>
                 <strong>Location:</strong> {selectedRequest.location}
               </p>
               <p>
-                <strong>Scan type:</strong> {selectedRequest.scanType.toString()}
+                <strong>Scan type:</strong> {getScanTypeLabel(selectedRequest.scanType)}
               </p>
               <p>
-                <strong>Payment:</strong> {selectedRequest.payment.toString()}
+                <strong>Number of Scans: </strong>{selectedRequest.requiredScans.toString()}
               </p>
               <p>
-                <strong>Scanner:</strong> {selectedRequest.scanner}
-              </p>
-              <p>
-                <strong>Fulfilled:</strong> {String(selectedRequest.fulfilled)}
+                <strong>Payment:</strong> {selectedPaymentEth.toFixed(4)} ETH
+                {selectedPaymentUsd != null ? ` (${formatUsd(selectedPaymentUsd)})` : ''}
               </p>
               <p>
                 <strong>Accepted:</strong> {String(selectedRequest.accepted)}
               </p>
-              <p>
-                <strong>Verification:</strong>{' '}
-                {selectedRequest.verificationStatus.toString()}
-              </p>
-              <p>
-                <strong>Scan URI:</strong> {selectedRequest.scanDataUri || '—'}
-              </p>
-              <p>
-                <strong>Required scans:</strong>{' '}
-                {selectedRequest.requiredScans.toString()}
-              </p>
-              <p>
-                <strong>Submissions:</strong>{' '}
-                {selectedRequest.submissions.toString()}
-              </p>
-              <p>
-                <strong>Scanner paid:</strong> {String(selectedRequest.scannerPaid)}
-              </p>
+
+              {canSeePrivateDetails ? (
+                <>
+                  <p>
+                    <strong>Fulfilled:</strong> {String(selectedRequest.fulfilled)}
+                  </p>
+                  <p>
+                    <strong>Verification:</strong>{' '}
+                    {getVerificationStatusLabel(selectedRequest.verificationStatus)}
+                  </p>
+                  <p>
+                    <strong>Scan URI:</strong> {selectedRequest.scanDataUri || '—'}
+                  </p>
+                  <p>
+                    <strong>Submissions:</strong> {selectedRequest.submissions.toString()}
+                  </p>
+                  <p>
+                    <strong>Scanner paid:</strong> {String(selectedRequest.scannerPaid)}
+                  </p>
+                </>
+              ) : null}
             </div>
           ) : (
             <p>Select a loaded request to inspect it.</p>
