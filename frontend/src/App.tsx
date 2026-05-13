@@ -66,7 +66,6 @@ type ContractRequest = {
 function App() {
   const { address, isConnected } = useAccount()
   const publicClient = usePublicClient()
-
   const [location, setLocation] = useState('')
   const [scanType, setScanType] = useState<number>(0)
   const [requiredScans, setRequiredScans] = useState(1)
@@ -83,6 +82,13 @@ function App() {
   const [uploadError, setUploadError] = useState('')
   const [actionError, setActionError] = useState('')
   const { writeContract, data: hash, isPending, error: writeError } = useWriteContract()
+  const clearStatus = useCallback(() => {setActionError('')}, [])
+  // const selectedRequestItem =
+  // availableRequests.find((item) => item.id.toString() === requestId) ?? null
+  // const otherRequests = availableRequests.filter(
+  // (item) => item.id.toString() !== requestId,
+// )
+  
 
   function getScanTypeLabel(value: number) {
     return scanTypeOptions.find((opt) => opt.value === value)?.label ?? String(value)
@@ -136,7 +142,6 @@ function App() {
   const hasSelectedRequest = requestId !== ''
   const canUseContract = Boolean(scan4MeContractAddress)
   const viewer = address?.toLowerCase()
-
 
   const {
     data: nextRequestIdData,
@@ -192,6 +197,7 @@ function App() {
   }
 
   const loadRequests = useCallback(async () => {
+    clearStatus()
     if (!publicClient) {
       setRequestsError('No public client available.')
       return
@@ -254,7 +260,8 @@ function App() {
     } finally {
       setLoadingRequests(false)
     }
-  }, [publicClient, nextRequestId])
+  }, [publicClient, nextRequestId, clearStatus])
+
   useEffect(() => {
     if (!isConfirmed) return
 
@@ -270,6 +277,9 @@ function App() {
   const isSelectedRequestAccepted = Boolean(selectedRequest?.accepted)
   const requestor = selectedRequest?.requestor?.toLowerCase()
   const scanner = selectedRequest?.scanner?.toLowerCase()
+//   const selectedRequestItem = availableRequests.find(
+//   (item) => item.id.toString() === requestId,
+// )
 
   const isViewerRequestor = viewer && requestor && viewer === requestor
   const isViewerScanner = viewer && scanner && viewer === scanner
@@ -311,6 +321,7 @@ function App() {
     ethPriceUsd != null ? selectedPaymentEth * ethPriceUsd : null
 
   const acceptRequest = async () => {
+    clearStatus()
     try {
       setActionError('')
       if (!publicClient || !address) {
@@ -338,6 +349,7 @@ function App() {
   }
 
   const submitScan = async () => {
+    clearStatus()
     if (!scanFile) {
       setUploadError('Please choose a file first.')
       return
@@ -363,6 +375,7 @@ function App() {
   }
 
   const requestVerification = () => {
+    clearStatus()
     writeContract({
       address: scan4MeContractAddress,
       abi: scan4MeAbi,
@@ -372,6 +385,7 @@ function App() {
   }
 
   const withdrawScannerPayment = () => {
+    clearStatus()
     writeContract({
       address: scan4MeContractAddress,
       abi: scan4MeAbi,
@@ -381,6 +395,7 @@ function App() {
   }
 
   const revertToOpen = () => {
+    clearStatus()
     writeContract({
       address: scan4MeContractAddress,
       abi: scan4MeAbi,
@@ -388,6 +403,39 @@ function App() {
       args: [requestIdValue],
     })
   }
+
+//   function RequestCard({
+//   item,
+//   selected,
+//   onSelect,
+//   children,
+// }: {
+//   item: RequestItemType
+//   selected?: boolean
+//   onSelect: () => void
+//   children?: React.ReactNode
+// }) {
+//   return (
+//     <button
+//       type="button"
+//       className={`request-item ${selected ? 'request-item-active' : ''}`}
+//       onClick={onSelect}
+//     >
+//       <div className="request-item-top">
+//         <strong>Request {shortLocation(item.data.location)}</strong>
+//         <span>{item.data.accepted ? 'Accepted' : 'Open'}</span>
+//       </div>
+
+//       <div className="request-item-meta">
+//         <span>{item.data.location || 'No location set'}</span>
+//         <span>Scans: {item.data.requiredScans.toString()}</span>
+//         <span>Submissions: {item.data.submissions.toString()}</span>
+//       </div>
+
+//       {children ? <div className="request-item-actions">{children}</div> : null}
+//     </button>
+//   )
+// }
 
   return (
     <main className="shell">
@@ -694,5 +742,6 @@ function App() {
     </main>
   )
 }
+
 
 export default App
