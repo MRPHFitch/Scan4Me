@@ -83,6 +83,8 @@ function App() {
   const [actionError, setActionError] = useState('')
   const { writeContract, data: hash, isPending, error: writeError } = useWriteContract()
   const clearStatus = useCallback(() => { setActionError('') }, [])
+  const [testingMode, setTestingMode] = useState(true)
+  const [mockTime, setMockTime] = useState('')
 
 
   function getScanTypeLabel(value: number) {
@@ -399,6 +401,36 @@ function App() {
     })
   }
 
+  const cancelRequest = () => {
+    clearStatus()
+    writeContract({
+      address: scan4MeContractAddress,
+      abi: scan4MeAbi,
+      functionName: 'cancelRequest',
+      args: [requestIdValue],
+    })
+  }
+
+  const setMode = () => {
+    writeContract({
+      address: scan4MeContractAddress,
+      abi: scan4MeAbi,
+      functionName: 'setTestingMode',
+      args: [testingMode],
+    })
+  }
+
+  const setMockTimeOnChain = () => {
+    if (!mockTime) return
+
+    writeContract({
+      address: scan4MeContractAddress,
+      abi: scan4MeAbi,
+      functionName: 'setMockTime',
+      args: [BigInt(mockTime)],
+    })
+  }
+
   return (
     <main className="shell">
       <section className="hero">
@@ -591,7 +623,18 @@ function App() {
                     >
                       Accept request
                     </button>
-
+                    {isViewerRequestor ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          clearStatus()
+                          void cancelRequest()
+                        }}
+                        disabled={!isConnected || txBusy}
+                      >
+                        Cancel request
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => {
@@ -603,7 +646,7 @@ function App() {
                       Back to list
                     </button>
                   </div>
-                ) : (
+                ):(
                   <>
                     <label className="field">
                       <span className="field-label">Upload scan file</span>
@@ -617,10 +660,8 @@ function App() {
                         }}
                       />
                     </label>
-
                     {scanFile ? <p className="tx">Selected file: {scanFile.name}</p> : null}
                     {uploadError ? <p className="tx error">{uploadError}</p> : null}
-
                     <div className="button-row">
                       <button
                         type="button"
@@ -632,7 +673,6 @@ function App() {
                       >
                         {uploadingScan ? 'Uploading...' : 'Submit scan'}
                       </button>
-
                       <button
                         type="button"
                         onClick={() => {
@@ -643,7 +683,6 @@ function App() {
                       >
                         Verify
                       </button>
-
                       <button
                         type="button"
                         onClick={() => {
@@ -654,7 +693,6 @@ function App() {
                       >
                         Withdraw
                       </button>
-
                       <button
                         type="button"
                         onClick={() => {
@@ -665,7 +703,6 @@ function App() {
                       >
                         Reopen
                       </button>
-
                       <button
                         type="button"
                         onClick={() => {
@@ -730,6 +767,51 @@ function App() {
             <p>Select a loaded request to inspect it.</p>
           )}
         </article>
+
+        <section className="card">
+          <h2>Testing controls</h2>
+
+          <div className="form">
+            <label className="field">
+              <span className="field-label">Testing mode</span>
+              <select
+                className="field-control"
+                value={String(testingMode)}
+                onChange={(e) => setTestingMode(e.target.value === 'true')}
+              >
+                <option value="true">Enabled</option>
+                <option value="false">Disabled</option>
+              </select>
+            </label>
+
+            <button
+              type="button"
+              onClick={setMode}
+              disabled={!isConnected || txBusy}
+            >
+              Set testing mode
+            </button>
+
+            <label className="field">
+              <span className="field-label">Mock time</span>
+              <input
+                className="field-control"
+                type="number"
+                value={mockTime}
+                onChange={(e) => setMockTime(e.target.value)}
+                placeholder="Unix timestamp"
+              />
+            </label>
+
+            <button
+              type="button"
+              onClick={setMockTimeOnChain}
+              disabled={!isConnected || txBusy || !mockTime}
+            >
+              Set mock time
+            </button>
+          </div>
+        </section>
       </section>
 
       {hash || isConfirmed || writeError || !canUseContract ? (

@@ -15,6 +15,8 @@ async function main() {
     throw new Error("Missing one or more required .env values");
   }
 
+  
+
   const source = fs.readFileSync("./functions/verificationSource.js", "utf8");
 
   const normalizedPrivateKey = privateKey.startsWith("0x")
@@ -42,7 +44,11 @@ async function main() {
     client: walletClient,
   });
 
-  const sourceHash = await contract.write.setVerificationSourceCode([source]);
+  const owner = await contract.read.owner();
+  console.log("contract owner:", owner);
+  console.log("script wallet:", account.address);
+
+  const sourceHash = await contract.write.setVerificationSourceCode(["test"]);
   console.log("setVerificationSourceCode tx:", sourceHash);
 
   if (oracleUrl && oracleUrl.trim().length > 0) {

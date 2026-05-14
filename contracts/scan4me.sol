@@ -213,9 +213,10 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
 
 
         FunctionsRequest.Request memory funcReq;
-        funcReq.initializeRequestForInlineJavaScript(verificationSourceCode);
-        funcReq.setArgs(args);
-        bytes memory requestBytes = funcReq.encodeCBOR();
+        funcReq._initializeRequestForInlineJavaScript(verificationSourceCode);
+        funcReq._setArgs(args);
+
+        bytes memory requestBytes = funcReq._encodeCBOR();
 
         bytes32 functionsRequestId = _sendRequest(
             requestBytes,
