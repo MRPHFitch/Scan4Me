@@ -13,6 +13,7 @@ import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/dev/v1_X/
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/dev/v1_X/libraries/FunctionsRequest.sol";
 import {IFunctionsRouter} from "../lib/interfaces/IFunctionsRouter.sol";
 
+//TODO: Update payment to increase for multiple scans, Verification logic and code
 
 contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     using SafeERC20 for IERC20;
@@ -22,6 +23,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     enum VerificationStatus { NotRequested, Pending, Approved, Rejected, Canceled }
 
     struct ScanRequest {
+        bool testMode;
         bool exists;
         address requestor;
         string location;
@@ -40,7 +42,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     }
 
     uint256 public constant REJECTED_TIMEOUT = 3 days;
-    mapping(uint256 => ScanRequest) public requests;
+    mapping(uint256 => ScanRequest) private requests;
     mapping(bytes32 => uint256) public verifRequestId;
     uint256 public nextRequestId;
     //Check to possible adjust for fair payment
@@ -95,6 +97,52 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         return requests[requestID];
     }
 
+    function getRequestBasic(uint256 requestId) external view returns (
+        bool testMode,
+        bool exists,
+        address requestor,
+        string memory location,
+        ScanType scanType,
+        uint256 payment,
+        address scanner,
+        bool fulfilled,
+        bool accepted
+    ) {
+        ScanRequest storage r = requests[requestId];
+        return (
+        r.testMode,
+        r.exists,
+        r.requestor,
+        r.location,
+        r.scanType,
+        r.payment,
+        r.scanner,
+        r.fulfilled,
+        r.accepted
+        );
+    }
+
+    function getRequestVerification(uint256 requestId) external view returns (
+        VerificationStatus verificationStatus,
+        string memory scanDataUri,
+        uint256 requiredScans,
+        uint256 submissions,
+        bytes32 verificationRequestId,
+        uint256 lastRejected,
+        bool scannerPaid
+    ) {
+        ScanRequest storage r = requests[requestId];
+        return (
+            r.verificationStatus,
+            r.scanDataUri,
+            r.requiredScans,
+            r.submissions,
+            r.verificationRequestId,
+            r.lastRejected,
+            r.scannerPaid
+        );
+    }
+
     function createRequest(
         string memory location,
         ScanType scanType,
@@ -106,23 +154,23 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         require(bytes(location).length > 0, "Location cannot be empty");
         emit DebugLog("Passed location check", msg.value);
 
-        requests[nextRequestId] = ScanRequest({
-            exists: true,
-            requestor: msg.sender,
-            location: location,
-            scanType: scanType,
-            payment: msg.value,
-            scanner: address(0),
-            fulfilled: false,
-            accepted: false,
-            verificationStatus: VerificationStatus.NotRequested,
-            scanDataUri: "",
-            requiredScans: requiredScans,
-            submissions: 0,
-            verificationRequestId: bytes32(0),
-            lastRejected: 0,
-            scannerPaid: false
-        });
+        ScanRequest storage r=requests[nextRequestId];
+        r.testMode=testingMode;
+        r.exists=true;
+        r.requestor = msg.sender;
+        r.location = location;
+        r.scanType = scanType;
+        r.payment = msg.value;
+        r.scanner = address(0);
+        r.fulfilled = false;
+        r.accepted = false;
+        r.verificationStatus = VerificationStatus.NotRequested;
+        r.scanDataUri = "";
+        r.requiredScans = requiredScans;
+        r.submissions = 0;
+        r.verificationRequestId = bytes32(0);
+        r.lastRejected = 0;
+        r.scannerPaid = false;
         nextRequestId++;
         emit RequestCreated(nextRequestId, msg.sender, location, scanType, msg.value);
     }
@@ -174,7 +222,6 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     }
 
     bool public testingMode = true;
-    bool public rejected=false;
     uint256 public mockTime;
     function setTestingMode(bool _mode) external onlyOwner {
         testingMode = _mode;
@@ -203,9 +250,10 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         emit DebugLog("requestVerification: passed verificationStatus check", uint256(req.verificationStatus));
 
         //Test mode bypass
-        if (testingMode) {
-            emit DebugLogString("Entering test mode bypass", testingMode ? "true" : "false");
+        if (req.testMode) {
+            emit DebugLogString("Entering test mode bypass", req.testMode ? "true" : "false");
             req.verificationRequestId = keccak256(abi.encodePacked(requestId, _now()));
+            verifRequestId[req.verificationRequestId] = requestId + 1;
             req.verificationStatus = VerificationStatus.Pending;
             req.fulfilled = false;
             emit VerificationRequested(requestId, req.verificationRequestId);

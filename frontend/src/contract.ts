@@ -12,6 +12,7 @@ export const scan4MeAbi = [
         name: '',
         type: 'tuple',
         components: [
+          {name: 'testMode', type: 'bool'},
           { name: 'exists', type: 'bool' },
           { name: 'requestor', type: 'address' },
           { name: 'location', type: 'string' },
@@ -114,7 +115,7 @@ export const scan4MeAbi = [
     name: 'chainlinkFunctionsSubscriptionId',
     stateMutability: 'view',
     inputs: [],
-    outputs: [{ name: '', type: 'uint32' }],
+    outputs: [{ name: '', type: 'uint64' }],
   },
   {
     type: 'function',
@@ -192,6 +193,17 @@ export const scan4MeAbi = [
     name: 'setMockTime',
     stateMutability: 'nonpayable',
     inputs: [{ name: '_mockTime', type: 'uint256' }],
+    outputs: [],
+  },
+  {
+    type: 'function',
+    name: 'testFulfillRequest',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'requestId', type: 'bytes32' },
+      { name: 'response', type: 'bytes' },
+      { name: 'err', type: 'bytes' },
+    ],
     outputs: [],
   },
   {

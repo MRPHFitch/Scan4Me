@@ -7,7 +7,7 @@ import {
   useWriteContract,
   useWaitForTransactionReceipt,
 } from 'wagmi'
-import { formatEther, parseEther } from 'viem'
+import { formatEther, parseEther, encodeAbiParameters, parseAbiParameters } from 'viem'
 import { scan4MeAbi, scan4MeContractAddress } from './contract'
 import './App.css'
 
@@ -67,6 +67,7 @@ const scanTypeOptions = [
 ] as const
 
 type ContractRequest = {
+  testMode: boolean
   exists: boolean
   requestor: `0x${string}`
   location: string
@@ -184,13 +185,6 @@ function App() {
 
   const requestData = requestDataData as ContractRequest | undefined
 
-  const resetCreateForm = () => {
-    setLocation('')
-    setScanType(0)
-    setRequiredScans(1)
-    setPaymentEth('minPayment')
-  }
-
   useEffect(() => {
     if (!hasSelectedRequest) return
     void refetchRequest()
@@ -215,26 +209,33 @@ function App() {
     if (minPayment == null) return
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setPaymentEth(minPaymentEth)
-}, [minPaymentEth, scanType, minPayment])
+  }, [minPaymentEth, scanType, minPayment])
+
+  const resetCreateForm = useCallback(() => {
+    setLocation('')
+    setScanType(0)
+    setRequiredScans(1)
+    setPaymentEth(minPaymentEth)
+  }, [minPaymentEth])
 
   const createRequest = () => {
-  if (!location || !paymentEth || minPayment == null) return
+    if (!location || !paymentEth || minPayment == null) return
 
-  const value = parseEther(paymentEth)
+    const value = parseEther(paymentEth)
 
-  if (value < minPayment) {
-    setActionError(`Payment must be at least ${formatEther(minPayment)} ETH.`)
-    return
+    if (value < minPayment) {
+      setActionError(`Payment must be at least ${formatEther(minPayment)} ETH.`)
+      return
+    }
+
+    writeContract({
+      address: scan4MeContractAddress,
+      abi: scan4MeAbi,
+      functionName: 'createRequest',
+      args: [location, scanType, BigInt(requiredScans)],
+      value,
+    })
   }
-
-  writeContract({
-    address: scan4MeContractAddress,
-    abi: scan4MeAbi,
-    functionName: 'createRequest',
-    args: [location, scanType, BigInt(requiredScans)],
-    value,
-  })
-}
 
   const loadRequests = useCallback(async () => {
     clearStatus()
@@ -288,11 +289,10 @@ function App() {
           }> => result.status === 'fulfilled',
         )
         .map((result) => result.value)
-        .filter((item) => item.data.exists)
+        .filter((item) => item.data.exists && !item.data.scannerPaid)
         .sort((a, b) => Number(b.id - a.id))
 
       setAvailableRequests(results)
-      setRequestId('')
     } catch (err) {
       setRequestsError(
         err instanceof Error ? err.message : 'Failed to load requests.',
@@ -313,7 +313,7 @@ function App() {
     }
 
     void refresh()
-  }, [isConfirmed, refetchRequest, loadRequests])
+  }, [isConfirmed, refetchRequest, loadRequests, resetCreateForm])
 
   const selectedRequest = hasSelectedRequest ? requestData : undefined
   const isSelectedRequestAccepted = Boolean(selectedRequest?.accepted)
@@ -477,6 +477,22 @@ function App() {
     })
   }
 
+  const devFulfill = () => {
+    if (!selectedRequest?.verificationRequestId) return
+    clearStatus()
+    const response = encodeAbiParameters(parseAbiParameters('bool'), [true])
+    writeContract({
+      address: scan4MeContractAddress,
+      abi: scan4MeAbi,
+      functionName: 'testFulfillRequest',
+      args: [
+        selectedRequest.verificationRequestId,
+        response,
+        '0x',
+      ],
+    })
+  }
+
   return (
     <main className="shell">
       <section className="hero">
@@ -530,7 +546,7 @@ function App() {
 
               {hash ? (
                 <p className="tx">
-                Tx hash:{' '}
+                  Tx hash:{' '}
                   <a
                     href={etherscanTxUrl(hash)}
                     target="_blank"
@@ -545,12 +561,12 @@ function App() {
                 <p className="tx error">
                   {getRevertReason(writeError)}
                 </p>
+              ) : null}
+              {!canUseContract ? (
+                <p className="tx error">Missing contract address.</p>
+              ) : null}
+            </section>
           ) : null}
-          {!canUseContract ? (
-            <p className="tx error">Missing contract address.</p>
-          ) : null}
-        </section>
-      ) : null}
 
         </aside>
       </section>
@@ -723,7 +739,7 @@ function App() {
                       Back to list
                     </button>
                   </div>
-                ):(
+                ) : (
                   <>
                     <label className="field">
                       <span className="field-label">Upload scan file</span>
@@ -782,6 +798,13 @@ function App() {
                       </button>
                       <button
                         type="button"
+                        onClick={devFulfill}
+                        disabled={!isConnected || txBusy || !selectedRequest?.verificationRequestId}
+                      >
+                        Fulfill Verification
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => {
                           clearStatus()
                           setRequestId('')
@@ -818,6 +841,10 @@ function App() {
               <p>
                 <strong>Accepted:</strong> {String(selectedRequest.accepted)}
               </p>
+              {/* For dev uses only */}
+              <p>
+                <strong>Test Mode: </strong>{selectedRequest?.testMode ? 'Yes' : 'No'}
+              </p>
 
               {canSeePrivateDetails ? (
                 <>
@@ -830,7 +857,7 @@ function App() {
                   </p>
                   {selectedRequest.scanDataUri ? (
                     <p className="tx">
-                      Scan URI:{' '}
+                      <strong>Scan URI: {' '}</strong>
                       <a
                         href={ipfsGatewayUrl(selectedRequest.scanDataUri)}
                         target="_blank"
