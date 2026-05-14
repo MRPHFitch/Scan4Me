@@ -32,7 +32,8 @@
     "clean": "hardhat clean",
     "compile": "hardhat compile",
     "on": "hardhat node",
-    "deploy": "hardhat run scripts/deploy.ts --network sepolia"
+    "deploy": "hardhat run scripts/deploy.ts --network sepolia",
+    "update": "hardhat run scripts/updateDeployed.ts --network sepolia"
   },
   "dependencies": {
     "dotenv": "^17.4.2"

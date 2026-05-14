@@ -10,8 +10,9 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Context} from "@openzeppelin/contracts/utils/Context.sol";
 import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
 import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/dev/v1_X/FunctionsClient.sol";
+import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/dev/v1_X/libraries/FunctionsRequest.sol";
 import {IFunctionsRouter} from "../lib/interfaces/IFunctionsRouter.sol";
-import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0/libraries/FunctionsRequest.sol";
+
 
 contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     using SafeERC20 for IERC20;
@@ -224,7 +225,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         );
 
         req.verificationRequestId = functionsRequestId;
-        verificationRequestToMarketRequestIdPlusOne[functionsRequestId] = requestId + 1;
+        verifRequestId[functionsRequestId] = requestId + 1;
         emit VerificationRequested(requestId, functionsRequestId);
     }
 
@@ -241,7 +242,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
             revert(string(err));
         }
 
-        uint256 marketRequestIdPlusOne = verificationRequestToMarketRequestIdPlusOne[requestId];
+        uint256 marketRequestIdPlusOne = verifRequestId[requestId];
         require(marketRequestIdPlusOne != 0, "Unknown verification request");
 
         uint256 marketRequestId = marketRequestIdPlusOne - 1;
