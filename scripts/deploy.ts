@@ -1,5 +1,6 @@
 import "dotenv/config"
 import hre from "hardhat"
+import { readFileSync } from "node:fs"
 import { createWalletClient, http, createPublicClient, getContract } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
 import { sepolia } from "viem/chains"
@@ -16,11 +17,7 @@ async function main() {
         throw new Error("Missing one or more required .env values")
     }
 
-    const fs = require("fs");
-    const source = fs.readFileSync(
-        "./functions/verificationSource.js",
-        "utf8"
-    );
+    const source = readFileSync("./functions/verificationSource.js", "utf8")
 
     const normalizedPrivateKey = privateKey.startsWith("0x")
         ? privateKey
