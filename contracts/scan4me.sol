@@ -10,17 +10,20 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Context} from "@openzeppelin/contracts/utils/Context.sol";
 import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
 import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/dev/v1_X/FunctionsClient.sol";
+import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/dev/v1_X/libraries/FunctionsRequest.sol";
 import {IFunctionsRouter} from "../lib/interfaces/IFunctionsRouter.sol";
 
-//TODO: Min_Payment 
+//TODO: Update payment to increase for multiple scans, Verification logic and code
 
 contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     using SafeERC20 for IERC20;
+    using FunctionsRequest for FunctionsRequest.Request;
 
     enum ScanType { PHOTO_360, LIDAR, STANDARD_PHOTO, DRONE_SCAN, VIDEO_CAPTURE }
     enum VerificationStatus { NotRequested, Pending, Approved, Rejected, Canceled }
 
     struct ScanRequest {
+        bool testMode;
         bool exists;
         address requestor;
         string location;
@@ -39,15 +42,26 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     }
 
     uint256 public constant REJECTED_TIMEOUT = 3 days;
-    mapping(uint256 => ScanRequest) public requests;
+    mapping(uint256 => ScanRequest) private requests;
+    mapping(bytes32 => uint256) public verifRequestId;
     uint256 public nextRequestId;
-    uint256 public constant MIN_PAYMENT = 0.00 ether; //Check to possible adjust for fair payment
+    //Check to possible adjust for fair payment
+    function minPayment(ScanType scanType) public pure returns (uint256) {
+        if (scanType == ScanType.PHOTO_360) return 0.045 ether;
+        if (scanType == ScanType.LIDAR) return 0.05 ether;
+        if (scanType == ScanType.STANDARD_PHOTO) return 0.025 ether;
+        if (scanType == ScanType.DRONE_SCAN) return 0.12 ether;
+        if (scanType == ScanType.VIDEO_CAPTURE) return 0.065 ether;
+
+        revert("Unknown scan type");
+    }
 
     // Chainlink Functions configuration
     bytes32 public donId;
     address public chainlinkFunctionsRouter;
-    uint32 public chainlinkFunctionsSubscriptionId;
+    uint64 public chainlinkFunctionsSubscriptionId;
     string public verificationOracleUrl;
+    string public verificationSourceCode;
 
     event RequestCreated(
         uint256 requestId,
@@ -70,7 +84,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     constructor(
         address _functionsRouter,
         bytes32 _donId,
-        uint32 _subscriptionId
+        uint64 _subscriptionId
         ) Ownable(msg.sender) FunctionsClient(_functionsRouter) {
             emit DebugLog("Constructor called", 0);
         chainlinkFunctionsRouter = _functionsRouter;
@@ -83,33 +97,80 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         return requests[requestID];
     }
 
+    function getRequestBasic(uint256 requestId) external view returns (
+        bool testMode,
+        bool exists,
+        address requestor,
+        string memory location,
+        ScanType scanType,
+        uint256 payment,
+        address scanner,
+        bool fulfilled,
+        bool accepted
+    ) {
+        ScanRequest storage r = requests[requestId];
+        return (
+        r.testMode,
+        r.exists,
+        r.requestor,
+        r.location,
+        r.scanType,
+        r.payment,
+        r.scanner,
+        r.fulfilled,
+        r.accepted
+        );
+    }
+
+    function getRequestVerification(uint256 requestId) external view returns (
+        VerificationStatus verificationStatus,
+        string memory scanDataUri,
+        uint256 requiredScans,
+        uint256 submissions,
+        bytes32 verificationRequestId,
+        uint256 lastRejected,
+        bool scannerPaid
+    ) {
+        ScanRequest storage r = requests[requestId];
+        return (
+            r.verificationStatus,
+            r.scanDataUri,
+            r.requiredScans,
+            r.submissions,
+            r.verificationRequestId,
+            r.lastRejected,
+            r.scannerPaid
+        );
+    }
+
     function createRequest(
         string memory location,
         ScanType scanType,
         uint256 requiredScans) external payable {
         emit DebugLog("Entered createRequest", msg.value);
-        require(msg.value >= MIN_PAYMENT, "Insufficient payment");
+        uint256 minPay=minPayment(scanType);
+        require(msg.value >= minPay, "Insufficient payment");
         emit DebugLog("Passed min payment", msg.value);
         require(bytes(location).length > 0, "Location cannot be empty");
         emit DebugLog("Passed location check", msg.value);
 
-        requests[nextRequestId] = ScanRequest({
-            exists: true,
-            requestor: msg.sender,
-            location: location,
-            scanType: scanType,
-            payment: msg.value,
-            scanner: address(0),
-            fulfilled: false,
-            accepted: false,
-            verificationStatus: VerificationStatus.NotRequested,
-            scanDataUri: "",
-            requiredScans: requiredScans,
-            submissions: 0,
-            verificationRequestId: bytes32(0),
-            lastRejected: 0,
-            scannerPaid: false
-        });
+        ScanRequest storage r=requests[nextRequestId];
+        r.testMode=testingMode;
+        r.exists=true;
+        r.requestor = msg.sender;
+        r.location = location;
+        r.scanType = scanType;
+        r.payment = msg.value;
+        r.scanner = address(0);
+        r.fulfilled = false;
+        r.accepted = false;
+        r.verificationStatus = VerificationStatus.NotRequested;
+        r.scanDataUri = "";
+        r.requiredScans = requiredScans;
+        r.submissions = 0;
+        r.verificationRequestId = bytes32(0);
+        r.lastRejected = 0;
+        r.scannerPaid = false;
         nextRequestId++;
         emit RequestCreated(nextRequestId, msg.sender, location, scanType, msg.value);
     }
@@ -161,7 +222,6 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     }
 
     bool public testingMode = true;
-    bool public rejected=false;
     uint256 public mockTime;
     function setTestingMode(bool _mode) external onlyOwner {
         testingMode = _mode;
@@ -190,9 +250,10 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         emit DebugLog("requestVerification: passed verificationStatus check", uint256(req.verificationStatus));
 
         //Test mode bypass
-        if (testingMode) {
-            emit DebugLogString("Entering test mode bypass", testingMode ? "true" : "false");
+        if (req.testMode) {
+            emit DebugLogString("Entering test mode bypass", req.testMode ? "true" : "false");
             req.verificationRequestId = keccak256(abi.encodePacked(requestId, _now()));
+            verifRequestId[req.verificationRequestId] = requestId + 1;
             req.verificationStatus = VerificationStatus.Pending;
             req.fulfilled = false;
             emit VerificationRequested(requestId, req.verificationRequestId);
@@ -201,76 +262,68 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         }
         
         // Prepare the Chainlink Functions request
-        string[] memory args = new string[](3);
-        args[0] = req.scanDataUri;
-        args[1] = req.location;
-        args[2] = scanTypeToString(req.scanType);
+        string[] memory args = new string[](5);
+            args[0] = Strings.toString(requestId);
+            args[1] = req.scanDataUri;
+            args[2] = req.location;
+            args[3] = scanTypeToString(req.scanType);
+            args[4] = verificationOracleUrl;
 
-        string[] memory sources = new string[](1);
-        sources[0] = verificationOracleUrl;
 
-        bytes memory requestBytes = abi.encode(args, sources);
+        FunctionsRequest.Request memory funcReq;
+        funcReq._initializeRequestForInlineJavaScript(verificationSourceCode);
+        funcReq._setArgs(args);
 
-        // Send the request to Chainlink Functions
-        bytes32 requestIdBytes32 = _sendRequest(
-        requestBytes,
-        uint64(uint256(donId)),
-        chainlinkFunctionsSubscriptionId,
-        bytes32(uint256(300000)) // Gas limit
+        bytes memory requestBytes = funcReq._encodeCBOR();
+
+        bytes32 functionsRequestId = _sendRequest(
+            requestBytes,
+            chainlinkFunctionsSubscriptionId,
+            uint32(300000),
+            donId
         );
 
-        req.verificationRequestId = requestIdBytes32;
-        req.verificationStatus = VerificationStatus.Pending;
-        emit VerificationRequested(requestId, requestIdBytes32);
+        req.verificationRequestId = functionsRequestId;
+        verifRequestId[functionsRequestId] = requestId + 1;
+        emit VerificationRequested(requestId, functionsRequestId);
     }
 
     function testFulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) public {
         _fulfillRequest(requestId, response, err);
     }
 
-    function _fulfillRequest(bytes32 requestId,bytes memory response,bytes memory err)
-    internal override {
-        (uint256 uintrequestID, bool approved) = abi.decode(response, (uint256, bool));
-        //Set a test mode bypass
-        if (testingMode ) {
-            // Decode the requestId to uint256 (if needed)
-            // Simulate a successful approval (or rejection)
-            ScanRequest storage test = requests[uintrequestID];
-            if (approved) {
-                test.verificationStatus = VerificationStatus.Approved;
-                test.fulfilled = true;
-                test.scannerPaid=false;
-            } 
-            else {
-                test.verificationStatus = VerificationStatus.Rejected;
-                test.fulfilled = false;
-                test.lastRejected = _now();
-            }
-            emit ScanVerified(uintrequestID, test.scanner, true); // true = approved
-            return;
+    function _fulfillRequest(
+        bytes32 requestId,
+        bytes memory response,
+        bytes memory err
+    ) internal override {
+        if (err.length > 0) {
+            revert(string(err));
         }
 
-        if (err.length > 0) {
-        revert(string(err));
-        }
-        
-        // Retrieve the request
-        ScanRequest storage req = requests[uintrequestID];
+        uint256 marketRequestIdPlusOne = verifRequestId[requestId];
+        require(marketRequestIdPlusOne != 0, "Unknown verification request");
+
+        uint256 marketRequestId = marketRequestIdPlusOne - 1;
+        ScanRequest storage req = requests[marketRequestId];
+
         require(req.verificationRequestId == requestId, "Invalid request ID");
         require(req.verificationStatus == VerificationStatus.Pending, "No verification pending");
 
-        // Update the verification status
-        if(approved){
-            req.verificationStatus=VerificationStatus.Approved;
-            req.fulfilled=true;
+        (bool approved) = abi.decode(response, (bool));
+
+        if (approved) {
+            req.verificationStatus = VerificationStatus.Approved;
+            req.fulfilled = true;
         }
-        else{
-            req.verificationStatus=VerificationStatus.Rejected;
-            req.fulfilled=false;
-            req.lastRejected=_now();
+        else {
+            req.verificationStatus = VerificationStatus.Rejected;
+            req.fulfilled = false;
+            req.lastRejected = _now();
         }
-        emit ScanVerified(uintrequestID, req.scanner, approved);
-    }
+
+        emit ScanVerified(marketRequestId, req.scanner, approved);
+}
 
     function revertToOpen(uint256 requestId) external nonReentrant{
         ScanRequest storage req=requests[requestId];
@@ -320,6 +373,10 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         delete requests[requestId];
         emit RequestCanceled(requestId);
         emit RequestDeleted(requestId);
+    }
+
+    function setVerificationSourceCode(string memory _code) external onlyOwner {
+        verificationSourceCode = _code;
     }
 
     function setVerificationOracleUrl(string memory _url) external onlyOwner {

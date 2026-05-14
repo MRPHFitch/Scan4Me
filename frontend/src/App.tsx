@@ -1,0 +1,934 @@
+import { ConnectButton } from '@rainbow-me/rainbowkit'
+import { useEffect, useState, useCallback } from 'react'
+import {
+  useAccount,
+  usePublicClient,
+  useReadContract,
+  useWriteContract,
+  useWaitForTransactionReceipt,
+} from 'wagmi'
+import { formatEther, parseEther, encodeAbiParameters, parseAbiParameters } from 'viem'
+import { scan4MeAbi, scan4MeContractAddress } from './contract'
+import './App.css'
+
+function shortAddress(address?: string) {
+  if (!address) return ''
+  return `${address.slice(0, 6)}...${address.slice(-4)}`
+}
+
+function shortLocation(location: string) {
+  return location.trim().split(/\s+/)[0] || 'Request'
+}
+
+function getRevertReason(error: unknown) {
+  if (typeof error !== 'object' || error === null) {
+    return 'Transaction failed.'
+  }
+
+  const e = error as {
+    shortMessage?: string
+    message?: string
+    details?: string
+  }
+
+  const text = e.shortMessage ?? e.details ?? e.message ?? 'Transaction failed.'
+
+  const match = text.match(/reason:\s*(.*?)(?:\s*Contract Call:|$)/s)
+  return match?.[1]?.trim() ?? text.trim()
+}
+
+function shortHash(value?: string) {
+  if (!value) return ''
+  return `${value.slice(0, 10)}...${value.slice(-8)}`
+}
+
+function etherscanTxUrl(hash: string) {
+  return `https://sepolia.etherscan.io/tx/${hash}`
+}
+
+function shortIpfsUri(uri?: string) {
+  if (!uri) return ''
+  if (!uri.startsWith('ipfs://')) return uri
+  const cid = uri.replace('ipfs://', '')
+  return `ipfs://${cid.slice(0, 8)}...${cid.slice(-6)}`
+}
+
+function ipfsGatewayUrl(uri: string) {
+  const cid = uri.replace('ipfs://', '')
+  return `https://ipfs.io/ipfs/${cid}`
+}
+
+const scanTypeOptions = [
+  { label: 'PHOTO_360', value: 0 },
+  { label: 'LIDAR', value: 1 },
+  { label: 'STANDARD_PHOTO', value: 2 },
+  { label: 'DRONE_SCAN', value: 3 },
+  { label: 'VIDEO_CAPTURE', value: 4 },
+] as const
+
+type ContractRequest = {
+  testMode: boolean
+  exists: boolean
+  requestor: `0x${string}`
+  location: string
+  scanType: number
+  payment: bigint
+  scanner: `0x${string}`
+  fulfilled: boolean
+  accepted: boolean
+  verificationStatus: number
+  scanDataUri: string
+  requiredScans: bigint
+  submissions: bigint
+  verificationRequestId: `0x${string}`
+  lastRejected: bigint
+  scannerPaid: boolean
+}
+
+function App() {
+  const { address, isConnected } = useAccount()
+  const publicClient = usePublicClient()
+  const [location, setLocation] = useState('')
+  const [scanType, setScanType] = useState<number>(0)
+  const [requiredScans, setRequiredScans] = useState(1)
+  const [ethPriceUsd, setEthPriceUsd] = useState<number | null>(null)
+  const [paymentEth, setPaymentEth] = useState('')
+  const [requestId, setRequestId] = useState('')
+  const [availableRequests, setAvailableRequests] = useState<
+    Array<{ id: bigint; data: ContractRequest }>
+  >([])
+  const [loadingRequests, setLoadingRequests] = useState(false)
+  const [requestsError, setRequestsError] = useState('')
+  const [scanFile, setScanFile] = useState<File | null>(null)
+  const [uploadingScan, setUploadingScan] = useState(false)
+  const [uploadError, setUploadError] = useState('')
+  const [actionError, setActionError] = useState('')
+  const { writeContract, data: hash, isPending, error: writeError } = useWriteContract()
+  const clearStatus = useCallback(() => { setActionError('') }, [])
+  const [testingMode, setTestingMode] = useState(true)
+  const [mockTime, setMockTime] = useState('')
+
+
+  function getScanTypeLabel(value: number) {
+    return scanTypeOptions.find((opt) => opt.value === value)?.label ?? String(value)
+  }
+
+  function getVerificationStatusLabel(value: number) {
+    switch (value) {
+      case 0:
+        return 'NotRequested'
+      case 1:
+        return 'Pending'
+      case 2:
+        return 'Approved'
+      case 3:
+        return 'Rejected'
+      case 4:
+        return 'Canceled'
+      default:
+        return String(value)
+    }
+  }
+
+  async function uploadFileToIpfs(file: File): Promise<string> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const res = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${import.meta.env.VITE_PINATA_JWT}`,
+      },
+      body: formData,
+    })
+
+    if (!res.ok) {
+      throw new Error(`IPFS upload failed: ${res.statusText}`)
+    }
+
+    const json = await res.json()
+    return `ipfs://${json.IpfsHash}`
+  }
+
+  const requestIdValue = (() => {
+    try {
+      return BigInt(requestId || '0')
+    } catch {
+      return 0n
+    }
+  })()
+
+  const hasSelectedRequest = requestId !== ''
+  const canUseContract = Boolean(scan4MeContractAddress)
+  const viewer = address?.toLowerCase()
+
+  const {
+    data: nextRequestIdData,
+    isLoading: loadingNextRequestId,
+  } = useReadContract({
+    address: scan4MeContractAddress,
+    abi: scan4MeAbi,
+    functionName: 'nextRequestId',
+  })
+
+  const nextRequestId = nextRequestIdData as bigint | undefined
+
+  const {
+    data: requestDataData,
+    refetch: refetchRequest,
+  } = useReadContract({
+    address: scan4MeContractAddress,
+    abi: scan4MeAbi,
+    functionName: 'getRequest',
+    args: [requestIdValue],
+  })
+
+  const requestData = requestDataData as ContractRequest | undefined
+
+  useEffect(() => {
+    if (!hasSelectedRequest) return
+    void refetchRequest()
+  }, [hasSelectedRequest, requestIdValue, refetchRequest])
+
+  const { isLoading: isConfirming, isSuccess: isConfirmed } =
+    useWaitForTransactionReceipt({ hash })
+
+  const txBusy = isPending || isConfirming
+
+  const { data: minPaymentData } = useReadContract({
+    address: scan4MeContractAddress,
+    abi: scan4MeAbi,
+    functionName: 'minPayment',
+    args: [scanType],
+  })
+
+  const minPayment = minPaymentData as bigint | undefined
+  const minPaymentEth = minPayment != null ? formatEther(minPayment) : '0'
+
+  useEffect(() => {
+    if (minPayment == null) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPaymentEth(minPaymentEth)
+  }, [minPaymentEth, scanType, minPayment])
+
+  const resetCreateForm = useCallback(() => {
+    setLocation('')
+    setScanType(0)
+    setRequiredScans(1)
+    setPaymentEth(minPaymentEth)
+  }, [minPaymentEth])
+
+  const createRequest = () => {
+    if (!location || !paymentEth || minPayment == null) return
+
+    const value = parseEther(paymentEth)
+
+    if (value < minPayment) {
+      setActionError(`Payment must be at least ${formatEther(minPayment)} ETH.`)
+      return
+    }
+
+    writeContract({
+      address: scan4MeContractAddress,
+      abi: scan4MeAbi,
+      functionName: 'createRequest',
+      args: [location, scanType, BigInt(requiredScans)],
+      value,
+    })
+  }
+
+  const loadRequests = useCallback(async () => {
+    clearStatus()
+    if (!publicClient) {
+      setRequestsError('No public client available.')
+      return
+    }
+
+    if (nextRequestId == null) {
+      setRequestsError('nextRequestId not loaded yet.')
+      return
+    }
+
+    try {
+      setLoadingRequests(true)
+      setRequestsError('')
+
+      const total = nextRequestId
+
+      if (total === 0n) {
+        setAvailableRequests([])
+        setRequestId('')
+        return
+      }
+
+      const ids: bigint[] = []
+      for (let id = 0n; id < total; id += 1n) {
+        ids.push(id)
+      }
+
+      const loaded = await Promise.allSettled(
+        ids.map(async (id) => {
+          const data = await publicClient.readContract({
+            address: scan4MeContractAddress,
+            abi: scan4MeAbi,
+            functionName: 'getRequest',
+            args: [id],
+          })
+
+          return { id, data: data as ContractRequest }
+        }),
+      )
+
+      const results = loaded
+        .filter(
+          (
+            result,
+          ): result is PromiseFulfilledResult<{
+            id: bigint
+            data: ContractRequest
+          }> => result.status === 'fulfilled',
+        )
+        .map((result) => result.value)
+        .filter((item) => item.data.exists && !item.data.scannerPaid)
+        .sort((a, b) => Number(b.id - a.id))
+
+      setAvailableRequests(results)
+    } catch (err) {
+      setRequestsError(
+        err instanceof Error ? err.message : 'Failed to load requests.',
+      )
+    } finally {
+      setLoadingRequests(false)
+    }
+  }, [publicClient, nextRequestId, clearStatus])
+
+  useEffect(() => {
+    if (!isConfirmed) return
+
+    const refresh = async () => {
+      await refetchRequest()
+      await loadRequests()
+      resetCreateForm()
+      setScanFile(null)
+    }
+
+    void refresh()
+  }, [isConfirmed, refetchRequest, loadRequests, resetCreateForm])
+
+  const selectedRequest = hasSelectedRequest ? requestData : undefined
+  const isSelectedRequestAccepted = Boolean(selectedRequest?.accepted)
+  const requestor = selectedRequest?.requestor?.toLowerCase()
+  const scanner = selectedRequest?.scanner?.toLowerCase()
+  const selectedRequestItem = availableRequests.find(
+    (item) => item.id.toString() === requestId,
+  )
+
+  const isViewerRequestor = viewer && requestor && viewer === requestor
+  const isViewerScanner = viewer && scanner && viewer === scanner
+  const canSeePrivateDetails =
+    Boolean(selectedRequest?.accepted) && (isViewerRequestor || isViewerScanner)
+
+  useEffect(() => {
+    const loadPrice = async () => {
+      try {
+        const res = await fetch(
+          'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd',
+        )
+        const json = await res.json()
+        setEthPriceUsd(json.ethereum.usd)
+      } catch {
+        setEthPriceUsd(null)
+      }
+    }
+
+    void loadPrice()
+  }, [])
+
+  function formatUsd(value: number) {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(value)
+  }
+
+  const createPaymentEth = Number(paymentEth || 0)
+  const createPaymentUsd =
+    ethPriceUsd != null ? createPaymentEth * ethPriceUsd : null
+
+  const selectedPaymentEth = selectedRequest
+    ? Number(formatEther(selectedRequest.payment))
+    : 0
+
+  const selectedPaymentUsd =
+    ethPriceUsd != null ? selectedPaymentEth * ethPriceUsd : null
+
+
+  const acceptRequest = async () => {
+    clearStatus()
+    try {
+      setActionError('')
+      if (!publicClient || !address) {
+        setActionError('No client or wallet available.')
+        return
+      }
+
+      await publicClient?.simulateContract({
+        address: scan4MeContractAddress,
+        abi: scan4MeAbi,
+        functionName: 'acceptRequest',
+        args: [requestIdValue],
+        account: address,
+      })
+
+      writeContract({
+        address: scan4MeContractAddress,
+        abi: scan4MeAbi,
+        functionName: 'acceptRequest',
+        args: [requestIdValue],
+      })
+    } catch (err) {
+      setActionError(getRevertReason(err))
+    }
+  }
+
+  const submitScan = async () => {
+    clearStatus()
+    if (!scanFile) {
+      setUploadError('Please choose a file first.')
+      return
+    }
+
+    try {
+      setUploadingScan(true)
+      setUploadError('')
+
+      const ipfsUri = await uploadFileToIpfs(scanFile)
+
+      writeContract({
+        address: scan4MeContractAddress,
+        abi: scan4MeAbi,
+        functionName: 'submitScan',
+        args: [requestIdValue, ipfsUri],
+      })
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Upload failed.')
+    } finally {
+      setUploadingScan(false)
+    }
+  }
+
+  const requestVerification = () => {
+    clearStatus()
+    writeContract({
+      address: scan4MeContractAddress,
+      abi: scan4MeAbi,
+      functionName: 'requestVerification',
+      args: [requestIdValue],
+    })
+  }
+
+  const withdrawScannerPayment = () => {
+    clearStatus()
+    writeContract({
+      address: scan4MeContractAddress,
+      abi: scan4MeAbi,
+      functionName: 'withdrawScannerPayment',
+      args: [requestIdValue],
+    })
+  }
+
+  const revertToOpen = () => {
+    clearStatus()
+    writeContract({
+      address: scan4MeContractAddress,
+      abi: scan4MeAbi,
+      functionName: 'revertToOpen',
+      args: [requestIdValue],
+    })
+  }
+
+  const cancelRequest = () => {
+    clearStatus()
+    writeContract({
+      address: scan4MeContractAddress,
+      abi: scan4MeAbi,
+      functionName: 'cancelRequest',
+      args: [requestIdValue],
+    })
+  }
+
+  const setMode = () => {
+    writeContract({
+      address: scan4MeContractAddress,
+      abi: scan4MeAbi,
+      functionName: 'setTestingMode',
+      args: [testingMode],
+    })
+  }
+
+  const setMockTimeOnChain = () => {
+    if (!mockTime) return
+
+    writeContract({
+      address: scan4MeContractAddress,
+      abi: scan4MeAbi,
+      functionName: 'setMockTime',
+      args: [BigInt(mockTime)],
+    })
+  }
+
+  const devFulfill = () => {
+    if (!selectedRequest?.verificationRequestId) return
+    clearStatus()
+    const response = encodeAbiParameters(parseAbiParameters('bool'), [true])
+    writeContract({
+      address: scan4MeContractAddress,
+      abi: scan4MeAbi,
+      functionName: 'testFulfillRequest',
+      args: [
+        selectedRequest.verificationRequestId,
+        response,
+        '0x',
+      ],
+    })
+  }
+
+  return (
+    <main className="shell">
+      <section className="hero">
+        <div className="hero-copy">
+          <p className="eyebrow">Scan4Me</p>
+          <h1>Create scan requests. Help the digital world.</h1>
+          <p className="lede">
+            Ask around the world for any scan required for your digital project.
+            Create the request and allow someone to accept it. Built in submission and verification features
+            streamline the process.
+          </p>
+
+          <div className="pill-row">
+            <span className="pill">Request</span>
+            <span className="pill">Accept</span>
+            <span className="pill">Submit</span>
+            <span className="pill">Verify</span>
+            <span className="pill">Pay</span>
+            <span className="pill">Cancel/Delete</span>
+          </div>
+        </div>
+
+        <aside className="wallet-card">
+          <ConnectButton />
+          <div className="wallet-status">
+            <span className={`dot ${isConnected ? 'dot-on' : ''}`} />
+            <span>
+              {isConnected
+                ? `Connected: ${shortAddress(address)}`
+                : 'Wallet disconnected'}
+            </span>
+          </div>
+
+          <div className="stat">
+            <strong>Next request ID: </strong>
+            <span>
+              {loadingNextRequestId
+                ? 'Loading...'
+                : nextRequestId?.toString() ?? '0'}
+            </span>
+          </div>
+          <div className="stat">
+            <strong>Minimum payment: </strong>
+            <span>
+              {minPayment != null ? `${formatEther(minPayment)} ETH` : 'Loading...'}
+            </span>
+          </div>
+          {hash || isConfirmed || writeError || !canUseContract ? (
+            <section className="card status-card">
+              <h2>Status</h2>
+
+              {hash ? (
+                <p className="tx">
+                  Tx hash:{' '}
+                  <a
+                    href={etherscanTxUrl(hash)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {shortHash(hash)}
+                  </a>
+                </p>
+              ) : null}
+              {isConfirmed ? <p className="tx success">Transaction confirmed.</p> : null}
+              {writeError ? (
+                <p className="tx error">
+                  {getRevertReason(writeError)}
+                </p>
+              ) : null}
+              {!canUseContract ? (
+                <p className="tx error">Missing contract address.</p>
+              ) : null}
+            </section>
+          ) : null}
+
+        </aside>
+      </section>
+
+      <section className="grid">
+        <article className="card">
+          <h2>Create request</h2>
+
+          <div className="form">
+            <label className="field">
+              <span className="field-label">Location Desired</span>
+              <input
+                className="field-control"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+              />
+            </label>
+
+            <label className="field">
+              <span className="field-label">Scan type</span>
+              <select
+                className="field-control"
+                value={scanType}
+                onChange={(e) => setScanType(Number(e.target.value))}
+              >
+                {scanTypeOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field">
+              <span className="field-label">How many scans required?</span>
+              <input
+                className="field-control"
+                type="number"
+                min="1"
+                value={requiredScans}
+                onChange={(e) => setRequiredScans(Number(e.target.value))}
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">Payment in ETH</span>
+              <input
+                className="field-control"
+                value={paymentEth}
+                onChange={(e) => setPaymentEth(e.target.value)}
+              />
+              <p className="tx">
+                Minimum required: {minPayment != null ? `${formatEther(minPayment)} ETH` : 'Loading...'}
+              </p>
+              <p className="tx">
+                Estimated payment: {createPaymentEth.toFixed(4)} ETH
+                {createPaymentUsd != null ? ` (${formatUsd(createPaymentUsd)})` : ''}
+              </p>
+            </label>
+
+
+            <button
+              type="button"
+              onClick={createRequest}
+              disabled={!isConnected || txBusy}
+            >
+              {isPending ? 'Submitting...' : 'Create request'}
+            </button>
+          </div>
+        </article>
+
+        <article className="card">
+          <h2>Request actions</h2>
+          <div className="form">
+            {requestsError ? <p className="tx error">{requestsError}</p> : null}
+            {actionError ? <p className="tx error">{actionError}</p> : null}
+            {writeError ? (
+              <p className="tx error">{getRevertReason(writeError)}</p>
+            ) : null}
+            {!hasSelectedRequest ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearStatus()
+                    void loadRequests()
+                  }}
+                  disabled={!isConnected || loadingRequests}
+                >
+                  {loadingRequests ? 'Loading requests...' : 'Load requests'}
+                </button>
+                {availableRequests.length > 0 ? (
+                  <div className="request-list">
+                    {availableRequests.map((item) => {
+                      const selected = requestId === item.id.toString()
+
+                      return (
+                        <button
+                          key={item.id.toString()}
+                          type="button"
+                          className={`request-item ${selected ? 'request-item-active' : ''}`}
+                          onClick={() => setRequestId(item.id.toString())}
+                        >
+                          <div className="request-item-top">
+                            <strong>Request {shortLocation(item.data.location)}</strong>
+                            <span>{item.data.accepted ? 'Accepted' : 'Open'}</span>
+                          </div>
+                          <div className="request-item-meta">
+                            <span>{item.data.location || 'No location set'}</span>
+                            <span>Scans: {item.data.requiredScans.toString()}</span>
+                            <span>Submissions: {item.data.submissions.toString()}</span>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                ) : null}
+              </>
+            ) : selectedRequestItem ? (
+              <>
+                <div className="request-list">
+                  <button
+                    type="button"
+                    className="request-item request-item-active"
+                    onClick={() => setRequestId(selectedRequestItem.id.toString())}
+                  >
+                    <div className="request-item-top">
+                      <strong>Request {shortLocation(selectedRequestItem.data.location)}</strong>
+                      <span>{selectedRequestItem.data.accepted ? 'Accepted' : 'Open'}</span>
+                    </div>
+                    <div className="request-item-meta">
+                      <span>{selectedRequestItem.data.location || 'No location set'}</span>
+                      <span>Scans: {selectedRequestItem.data.requiredScans.toString()}</span>
+                      <span>Submissions: {selectedRequestItem.data.submissions.toString()}</span>
+                    </div>
+                  </button>
+                </div>
+
+                {!isSelectedRequestAccepted ? (
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        clearStatus()
+                        void acceptRequest()
+                      }}
+                      disabled={!isConnected || txBusy}
+                    >
+                      Accept request
+                    </button>
+                    {isViewerRequestor ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          clearStatus()
+                          void cancelRequest()
+                        }}
+                        disabled={!isConnected || txBusy}
+                      >
+                        Cancel request
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        clearStatus()
+                        setRequestId('')
+                      }}
+                      disabled={txBusy}
+                    >
+                      Back to list
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <label className="field">
+                      <span className="field-label">Upload scan file</span>
+                      <input
+                        className="field-control"
+                        type="file"
+                        accept="image/*,video/*,.las,.laz,.ply,.pcd,.e57,.obj,.glb,.gltf,.zip"
+                        onChange={(e) => {
+                          clearStatus()
+                          setScanFile(e.target.files?.[0] ?? null)
+                        }}
+                      />
+                    </label>
+                    {scanFile ? <p className="tx">Selected file: {scanFile.name}</p> : null}
+                    {uploadError ? <p className="tx error">{uploadError}</p> : null}
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          clearStatus()
+                          void submitScan()
+                        }}
+                        disabled={!isConnected || txBusy || uploadingScan || !scanFile}
+                      >
+                        {uploadingScan ? 'Uploading...' : 'Submit scan'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          clearStatus()
+                          void requestVerification()
+                        }}
+                        disabled={!isConnected || txBusy}
+                      >
+                        Verify
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          clearStatus()
+                          void withdrawScannerPayment()
+                        }}
+                        disabled={!isConnected || txBusy}
+                      >
+                        Withdraw
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          clearStatus()
+                          void revertToOpen()
+                        }}
+                        disabled={!isConnected || txBusy}
+                      >
+                        Reopen
+                      </button>
+                      <button
+                        type="button"
+                        onClick={devFulfill}
+                        disabled={!isConnected || txBusy || !selectedRequest?.verificationRequestId}
+                      >
+                        Fulfill Verification
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          clearStatus()
+                          setRequestId('')
+                        }}
+                        disabled={txBusy}
+                      >
+                        Back to list
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            ) : null}
+          </div>
+        </article>
+
+        <article className="card">
+          <h2>Request preview</h2>
+          {selectedRequest ? (
+            <div className="preview">
+              <p>
+                <strong>Location:</strong> {selectedRequest.location}
+              </p>
+              <p>
+                <strong>Scan type:</strong> {getScanTypeLabel(selectedRequest.scanType)}
+              </p>
+              <p>
+                <strong>Number of Scans: </strong>{selectedRequest.requiredScans.toString()}
+              </p>
+              <p>
+                <strong>Payment:</strong> {selectedPaymentEth.toFixed(4)} ETH
+                {selectedPaymentUsd != null ? ` (${formatUsd(selectedPaymentUsd)})` : ''}
+              </p>
+              <p>
+                <strong>Accepted:</strong> {String(selectedRequest.accepted)}
+              </p>
+              {/* For dev uses only */}
+              <p>
+                <strong>Test Mode: </strong>{selectedRequest?.testMode ? 'Yes' : 'No'}
+              </p>
+
+              {canSeePrivateDetails ? (
+                <>
+                  <p>
+                    <strong>Fulfilled:</strong> {String(selectedRequest.fulfilled)}
+                  </p>
+                  <p>
+                    <strong>Verification:</strong>{' '}
+                    {getVerificationStatusLabel(selectedRequest.verificationStatus)}
+                  </p>
+                  {selectedRequest.scanDataUri ? (
+                    <p className="tx">
+                      <strong>Scan URI: {' '}</strong>
+                      <a
+                        href={ipfsGatewayUrl(selectedRequest.scanDataUri)}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {shortIpfsUri(selectedRequest.scanDataUri)}
+                      </a>
+                    </p>
+                  ) : null}
+                  <p>
+                    <strong>Submissions:</strong> {selectedRequest.submissions.toString()}
+                  </p>
+                  <p>
+                    <strong>Scanner paid:</strong> {String(selectedRequest.scannerPaid)}
+                  </p>
+                </>
+              ) : null}
+            </div>
+          ) : (
+            <p>Select a loaded request to inspect it.</p>
+          )}
+        </article>
+
+        <section className="card">
+          <h2>Testing controls</h2>
+
+          <div className="form">
+            <label className="field">
+              <span className="field-label">Testing mode</span>
+              <select
+                className="field-control"
+                value={String(testingMode)}
+                onChange={(e) => setTestingMode(e.target.value === 'true')}
+              >
+                <option value="true">Enabled</option>
+                <option value="false">Disabled</option>
+              </select>
+            </label>
+
+            <button
+              type="button"
+              onClick={setMode}
+              disabled={!isConnected || txBusy}
+            >
+              Set testing mode
+            </button>
+
+            <label className="field">
+              <span className="field-label">Mock time</span>
+              <input
+                className="field-control"
+                type="number"
+                value={mockTime}
+                onChange={(e) => setMockTime(e.target.value)}
+                placeholder="Unix timestamp"
+              />
+            </label>
+
+            <button
+              type="button"
+              onClick={setMockTimeOnChain}
+              disabled={!isConnected || txBusy || !mockTime}
+            >
+              Set mock time
+            </button>
+          </div>
+        </section>
+      </section>
+    </main>
+  )
+}
+
+
+export default App
