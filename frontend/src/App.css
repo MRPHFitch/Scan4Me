@@ -249,3 +249,8 @@ h1 {
   margin-top: 1.5rem;
   padding: 1rem;
 }
+
+.tx-long {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

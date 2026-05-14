@@ -37,6 +37,27 @@ function getRevertReason(error: unknown) {
   return match?.[1]?.trim() ?? text.trim()
 }
 
+function shortHash(value?: string) {
+  if (!value) return ''
+  return `${value.slice(0, 10)}...${value.slice(-8)}`
+}
+
+function etherscanTxUrl(hash: string) {
+  return `https://sepolia.etherscan.io/tx/${hash}`
+}
+
+function shortIpfsUri(uri?: string) {
+  if (!uri) return ''
+  if (!uri.startsWith('ipfs://')) return uri
+  const cid = uri.replace('ipfs://', '')
+  return `ipfs://${cid.slice(0, 8)}...${cid.slice(-6)}`
+}
+
+function ipfsGatewayUrl(uri: string) {
+  const cid = uri.replace('ipfs://', '')
+  return `https://ipfs.io/ipfs/${cid}`
+}
+
 const scanTypeOptions = [
   { label: 'PHOTO_360', value: 0 },
   { label: 'LIDAR', value: 1 },
@@ -70,7 +91,7 @@ function App() {
   const [scanType, setScanType] = useState<number>(0)
   const [requiredScans, setRequiredScans] = useState(1)
   const [ethPriceUsd, setEthPriceUsd] = useState<number | null>(null)
-  const [paymentEth, setPaymentEth] = useState('0.045')
+  const [paymentEth, setPaymentEth] = useState('')
   const [requestId, setRequestId] = useState('')
   const [availableRequests, setAvailableRequests] = useState<
     Array<{ id: bigint; data: ContractRequest }>
@@ -151,14 +172,6 @@ function App() {
 
   const nextRequestId = nextRequestIdData as bigint | undefined
 
-  const { data: minPaymentData } = useReadContract({
-    address: scan4MeContractAddress,
-    abi: scan4MeAbi,
-    functionName: 'MIN_PAYMENT',
-  })
-
-  const minPayment = minPaymentData as bigint | undefined
-
   const {
     data: requestDataData,
     refetch: refetchRequest,
@@ -171,6 +184,13 @@ function App() {
 
   const requestData = requestDataData as ContractRequest | undefined
 
+  const resetCreateForm = () => {
+    setLocation('')
+    setScanType(0)
+    setRequiredScans(1)
+    setPaymentEth('minPayment')
+  }
+
   useEffect(() => {
     if (!hasSelectedRequest) return
     void refetchRequest()
@@ -181,17 +201,40 @@ function App() {
 
   const txBusy = isPending || isConfirming
 
-  const createRequest = () => {
-    if (!location || !paymentEth) return
+  const { data: minPaymentData } = useReadContract({
+    address: scan4MeContractAddress,
+    abi: scan4MeAbi,
+    functionName: 'minPayment',
+    args: [scanType],
+  })
 
-    writeContract({
-      address: scan4MeContractAddress,
-      abi: scan4MeAbi,
-      functionName: 'createRequest',
-      args: [location, scanType, BigInt(requiredScans)],
-      value: parseEther(paymentEth),
-    })
+  const minPayment = minPaymentData as bigint | undefined
+  const minPaymentEth = minPayment != null ? formatEther(minPayment) : '0'
+
+  useEffect(() => {
+    if (minPayment == null) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPaymentEth(minPaymentEth)
+}, [minPaymentEth, scanType, minPayment])
+
+  const createRequest = () => {
+  if (!location || !paymentEth || minPayment == null) return
+
+  const value = parseEther(paymentEth)
+
+  if (value < minPayment) {
+    setActionError(`Payment must be at least ${formatEther(minPayment)} ETH.`)
+    return
   }
+
+  writeContract({
+    address: scan4MeContractAddress,
+    abi: scan4MeAbi,
+    functionName: 'createRequest',
+    args: [location, scanType, BigInt(requiredScans)],
+    value,
+  })
+}
 
   const loadRequests = useCallback(async () => {
     clearStatus()
@@ -265,6 +308,8 @@ function App() {
     const refresh = async () => {
       await refetchRequest()
       await loadRequests()
+      resetCreateForm()
+      setScanFile(null)
     }
 
     void refresh()
@@ -316,6 +361,7 @@ function App() {
 
   const selectedPaymentUsd =
     ethPriceUsd != null ? selectedPaymentEth * ethPriceUsd : null
+
 
   const acceptRequest = async () => {
     clearStatus()
@@ -448,6 +494,8 @@ function App() {
             <span className="pill">Accept</span>
             <span className="pill">Submit</span>
             <span className="pill">Verify</span>
+            <span className="pill">Pay</span>
+            <span className="pill">Cancel/Delete</span>
           </div>
         </div>
 
@@ -470,13 +518,40 @@ function App() {
                 : nextRequestId?.toString() ?? '0'}
             </span>
           </div>
-
           <div className="stat">
-            <strong>Min payment: </strong>
+            <strong>Minimum payment: </strong>
             <span>
-              {minPayment ? `${formatEther(minPayment)} ETH` : 'Loading...'}
+              {minPayment != null ? `${formatEther(minPayment)} ETH` : 'Loading...'}
             </span>
           </div>
+          {hash || isConfirmed || writeError || !canUseContract ? (
+            <section className="card status-card">
+              <h2>Status</h2>
+
+              {hash ? (
+                <p className="tx">
+                Tx hash:{' '}
+                  <a
+                    href={etherscanTxUrl(hash)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {shortHash(hash)}
+                  </a>
+                </p>
+              ) : null}
+              {isConfirmed ? <p className="tx success">Transaction confirmed.</p> : null}
+              {writeError ? (
+                <p className="tx error">
+                  {getRevertReason(writeError)}
+                </p>
+          ) : null}
+          {!canUseContract ? (
+            <p className="tx error">Missing contract address.</p>
+          ) : null}
+        </section>
+      ) : null}
+
         </aside>
       </section>
 
@@ -519,7 +594,6 @@ function App() {
                 onChange={(e) => setRequiredScans(Number(e.target.value))}
               />
             </label>
-
             <label className="field">
               <span className="field-label">Payment in ETH</span>
               <input
@@ -527,6 +601,9 @@ function App() {
                 value={paymentEth}
                 onChange={(e) => setPaymentEth(e.target.value)}
               />
+              <p className="tx">
+                Minimum required: {minPayment != null ? `${formatEther(minPayment)} ETH` : 'Loading...'}
+              </p>
               <p className="tx">
                 Estimated payment: {createPaymentEth.toFixed(4)} ETH
                 {createPaymentUsd != null ? ` (${formatUsd(createPaymentUsd)})` : ''}
@@ -751,9 +828,18 @@ function App() {
                     <strong>Verification:</strong>{' '}
                     {getVerificationStatusLabel(selectedRequest.verificationStatus)}
                   </p>
-                  <p>
-                    <strong>Scan URI:</strong> {selectedRequest.scanDataUri || '—'}
-                  </p>
+                  {selectedRequest.scanDataUri ? (
+                    <p className="tx">
+                      Scan URI:{' '}
+                      <a
+                        href={ipfsGatewayUrl(selectedRequest.scanDataUri)}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {shortIpfsUri(selectedRequest.scanDataUri)}
+                      </a>
+                    </p>
+                  ) : null}
                   <p>
                     <strong>Submissions:</strong> {selectedRequest.submissions.toString()}
                   </p>
@@ -813,23 +899,6 @@ function App() {
           </div>
         </section>
       </section>
-
-      {hash || isConfirmed || writeError || !canUseContract ? (
-        <section className="card status-card">
-          <h2>Status</h2>
-
-          {hash ? <p className="tx">Tx hash: {hash}</p> : null}
-          {isConfirmed ? <p className="tx success">Transaction confirmed.</p> : null}
-          {writeError ? (
-            <p className="tx error">
-              {getRevertReason(writeError)}
-            </p>
-          ) : null}
-          {!canUseContract ? (
-            <p className="tx error">Missing contract address.</p>
-          ) : null}
-        </section>
-      ) : null}
     </main>
   )
 }

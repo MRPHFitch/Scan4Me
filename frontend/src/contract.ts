@@ -69,9 +69,9 @@ export const scan4MeAbi = [
   },
   {
     type: 'function',
-    name: 'MIN_PAYMENT',
-    stateMutability: 'view',
-    inputs: [],
+    name: 'minPayment',
+    stateMutability: 'pure',
+    inputs: [{name: 'scanType', type: 'uint8'}],
     outputs: [{ name: '', type: 'uint256' }],
   },
   {

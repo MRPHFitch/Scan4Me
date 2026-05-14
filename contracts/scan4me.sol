@@ -43,7 +43,16 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     mapping(uint256 => ScanRequest) public requests;
     mapping(bytes32 => uint256) public verifRequestId;
     uint256 public nextRequestId;
-    uint256 public constant MIN_PAYMENT = 0.045 ether; //Check to possible adjust for fair payment
+    //Check to possible adjust for fair payment
+    function minPayment(ScanType scanType) public pure returns (uint256) {
+        if (scanType == ScanType.PHOTO_360) return 0.045 ether;
+        if (scanType == ScanType.LIDAR) return 0.05 ether;
+        if (scanType == ScanType.STANDARD_PHOTO) return 0.025 ether;
+        if (scanType == ScanType.DRONE_SCAN) return 0.12 ether;
+        if (scanType == ScanType.VIDEO_CAPTURE) return 0.065 ether;
+
+        revert("Unknown scan type");
+    }
 
     // Chainlink Functions configuration
     bytes32 public donId;
@@ -91,7 +100,8 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         ScanType scanType,
         uint256 requiredScans) external payable {
         emit DebugLog("Entered createRequest", msg.value);
-        require(msg.value >= MIN_PAYMENT, "Insufficient payment");
+        uint256 minPay=minPayment(scanType);
+        require(msg.value >= minPay, "Insufficient payment");
         emit DebugLog("Passed min payment", msg.value);
         require(bytes(location).length > 0, "Location cannot be empty");
         emit DebugLog("Passed location check", msg.value);
