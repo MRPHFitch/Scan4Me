@@ -11,11 +11,11 @@ import {Context} from "@openzeppelin/contracts/utils/Context.sol";
 import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
 import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/dev/v1_X/FunctionsClient.sol";
 import {IFunctionsRouter} from "../lib/interfaces/IFunctionsRouter.sol";
-
-//TODO: Min_Payment 
+import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0/libraries/FunctionsRequest.sol";
 
 contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     using SafeERC20 for IERC20;
+    using FunctionsRequest for FunctionsRequest.Request;
 
     enum ScanType { PHOTO_360, LIDAR, STANDARD_PHOTO, DRONE_SCAN, VIDEO_CAPTURE }
     enum VerificationStatus { NotRequested, Pending, Approved, Rejected, Canceled }
@@ -40,14 +40,16 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
 
     uint256 public constant REJECTED_TIMEOUT = 3 days;
     mapping(uint256 => ScanRequest) public requests;
+    mapping(bytes32 => uint256) public verifRequestId;
     uint256 public nextRequestId;
     uint256 public constant MIN_PAYMENT = 0.045 ether; //Check to possible adjust for fair payment
 
     // Chainlink Functions configuration
     bytes32 public donId;
     address public chainlinkFunctionsRouter;
-    uint32 public chainlinkFunctionsSubscriptionId;
+    uint64 public chainlinkFunctionsSubscriptionId;
     string public verificationOracleUrl;
+    string public verificationSourceCode;
 
     event RequestCreated(
         uint256 requestId,
@@ -70,7 +72,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     constructor(
         address _functionsRouter,
         bytes32 _donId,
-        uint32 _subscriptionId
+        uint64 _subscriptionId
         ) Ownable(msg.sender) FunctionsClient(_functionsRouter) {
             emit DebugLog("Constructor called", 0);
         chainlinkFunctionsRouter = _functionsRouter;
@@ -201,76 +203,67 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         }
         
         // Prepare the Chainlink Functions request
-        string[] memory args = new string[](3);
-        args[0] = req.scanDataUri;
-        args[1] = req.location;
-        args[2] = scanTypeToString(req.scanType);
+        string[] memory args = new string[](5);
+            args[0] = Strings.toString(requestId);
+            args[1] = req.scanDataUri;
+            args[2] = req.location;
+            args[3] = scanTypeToString(req.scanType);
+            args[4] = verificationOracleUrl;
 
-        string[] memory sources = new string[](1);
-        sources[0] = verificationOracleUrl;
 
-        bytes memory requestBytes = abi.encode(args, sources);
+        FunctionsRequest.Request memory funcReq;
+        funcReq.initializeRequestForInlineJavaScript(verificationSourceCode);
+        funcReq.setArgs(args);
+        bytes memory requestBytes = funcReq.encodeCBOR();
 
-        // Send the request to Chainlink Functions
-        bytes32 requestIdBytes32 = _sendRequest(
-        requestBytes,
-        uint64(uint256(donId)),
-        chainlinkFunctionsSubscriptionId,
-        bytes32(uint256(300000)) // Gas limit
+        bytes32 functionsRequestId = _sendRequest(
+            requestBytes,
+            chainlinkFunctionsSubscriptionId,
+            uint32(300000),
+            donId
         );
 
-        req.verificationRequestId = requestIdBytes32;
-        req.verificationStatus = VerificationStatus.Pending;
-        emit VerificationRequested(requestId, requestIdBytes32);
+        req.verificationRequestId = functionsRequestId;
+        verificationRequestToMarketRequestIdPlusOne[functionsRequestId] = requestId + 1;
+        emit VerificationRequested(requestId, functionsRequestId);
     }
 
     function testFulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) public {
         _fulfillRequest(requestId, response, err);
     }
 
-    function _fulfillRequest(bytes32 requestId,bytes memory response,bytes memory err)
-    internal override {
-        (uint256 uintrequestID, bool approved) = abi.decode(response, (uint256, bool));
-        //Set a test mode bypass
-        if (testingMode ) {
-            // Decode the requestId to uint256 (if needed)
-            // Simulate a successful approval (or rejection)
-            ScanRequest storage test = requests[uintrequestID];
-            if (approved) {
-                test.verificationStatus = VerificationStatus.Approved;
-                test.fulfilled = true;
-                test.scannerPaid=false;
-            } 
-            else {
-                test.verificationStatus = VerificationStatus.Rejected;
-                test.fulfilled = false;
-                test.lastRejected = _now();
-            }
-            emit ScanVerified(uintrequestID, test.scanner, true); // true = approved
-            return;
+    function _fulfillRequest(
+        bytes32 requestId,
+        bytes memory response,
+        bytes memory err
+    ) internal override {
+        if (err.length > 0) {
+            revert(string(err));
         }
 
-        if (err.length > 0) {
-        revert(string(err));
-        }
-        
-        // Retrieve the request
-        ScanRequest storage req = requests[uintrequestID];
+        uint256 marketRequestIdPlusOne = verificationRequestToMarketRequestIdPlusOne[requestId];
+        require(marketRequestIdPlusOne != 0, "Unknown verification request");
+
+        uint256 marketRequestId = marketRequestIdPlusOne - 1;
+        ScanRequest storage req = requests[marketRequestId];
+
         require(req.verificationRequestId == requestId, "Invalid request ID");
         require(req.verificationStatus == VerificationStatus.Pending, "No verification pending");
 
-        // Update the verification status
-        if(approved){
-            req.verificationStatus=VerificationStatus.Approved;
-            req.fulfilled=true;
+        (bool approved) = abi.decode(response, (bool));
+
+        if (approved) {
+            req.verificationStatus = VerificationStatus.Approved;
+            req.fulfilled = true;
         }
-        else{
-            req.verificationStatus=VerificationStatus.Rejected;
-            req.fulfilled=false;
-            req.lastRejected=_now();
+        else {
+            req.verificationStatus = VerificationStatus.Rejected;
+            req.fulfilled = false;
+            req.lastRejected = _now();
         }
-        emit ScanVerified(uintrequestID, req.scanner, approved);
-    }
+
+        emit ScanVerified(marketRequestId, req.scanner, approved);
+}
 
     function revertToOpen(uint256 requestId) external nonReentrant{
         ScanRequest storage req=requests[requestId];
@@ -320,6 +313,10 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         delete requests[requestId];
         emit RequestCanceled(requestId);
         emit RequestDeleted(requestId);
+    }
+
+    function setVerificationSourceCode(string memory _code) external onlyOwner {
+        verificationSourceCode = _code;
     }
 
     function setVerificationOracleUrl(string memory _url) external onlyOwner {
