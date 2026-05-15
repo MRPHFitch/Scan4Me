@@ -11,15 +11,16 @@ import { formatEther, parseEther, encodeAbiParameters, parseAbiParameters } from
 import { scan4MeAbi, scan4MeContractAddress } from './contract'
 import './App.css'
 
+//Helper to shorten the length of the wallet's address
 function shortAddress(address?: string) {
   if (!address) return ''
   return `${address.slice(0, 6)}...${address.slice(-4)}`
 }
-
+//Helper to display the location nicer
 function shortLocation(location: string) {
   return location.trim().split(/\s+/)[0] || 'Request'
 }
-
+//Helper to determine what went wrong
 function getRevertReason(error: unknown) {
   if (typeof error !== 'object' || error === null) {
     return 'Transaction failed.'
@@ -37,22 +38,25 @@ function getRevertReason(error: unknown) {
   return match?.[1]?.trim() ?? text.trim()
 }
 
+//Helper to shorten the length of a tx
 function shortHash(value?: string) {
   if (!value) return ''
   return `${value.slice(0, 10)}...${value.slice(-8)}`
 }
 
+//Provide a link to the tx
 function etherscanTxUrl(hash: string) {
   return `https://sepolia.etherscan.io/tx/${hash}`
 }
 
+//Helper to cut down length of the IPFS url
 function shortIpfsUri(uri?: string) {
   if (!uri) return ''
   if (!uri.startsWith('ipfs://')) return uri
   const cid = uri.replace('ipfs://', '')
   return `ipfs://${cid.slice(0, 8)}...${cid.slice(-6)}`
 }
-
+//Link to the scanned URI to check it out if desired
 function ipfsGatewayUrl(uri: string) {
   const cid = uri.replace('ipfs://', '')
   return `https://ipfs.io/ipfs/${cid}`
@@ -86,6 +90,7 @@ type ContractRequest = {
 }
 
 function App() {
+  //Establish variables
   const { address, isConnected } = useAccount()
   const publicClient = usePublicClient()
   const [location, setLocation] = useState('')
@@ -108,7 +113,7 @@ function App() {
   const [testingMode, setTestingMode] = useState(true)
   const [mockTime, setMockTime] = useState('')
 
-
+  //Find what type of scan is being done and put it in a string
   function getScanTypeLabel(value: number) {
     return scanTypeOptions.find((opt) => opt.value === value)?.label ?? String(value)
   }
@@ -130,6 +135,7 @@ function App() {
     }
   }
 
+  //Allow for uploading the scan directly to the dapp UI instead of trying to do it to IPFS on own
   async function uploadFileToIpfs(file: File): Promise<string> {
     const formData = new FormData()
     formData.append('file', file)
@@ -158,6 +164,7 @@ function App() {
     }
   })()
 
+  //Establish a determiner for if a request has been accepted or not
   const hasSelectedRequest = requestId !== ''
   const canUseContract = Boolean(scan4MeContractAddress)
   const viewer = address?.toLowerCase()
@@ -202,6 +209,7 @@ function App() {
     args: [scanType],
   })
 
+  //Establish some payment variables so we can show USD and ETH values and update fields as scan type changes
   const minPayment = minPaymentData as bigint | undefined
   const minPaymentEth = minPayment != null ? formatEther(minPayment) : '0'
 
@@ -211,6 +219,7 @@ function App() {
     setPaymentEth(minPaymentEth)
   }, [minPaymentEth, scanType, minPayment])
 
+  //After submitting a request, reset the form
   const resetCreateForm = useCallback(() => {
     setLocation('')
     setScanType(0)
@@ -237,6 +246,7 @@ function App() {
     })
   }
 
+  //Button to load the requests available
   const loadRequests = useCallback(async () => {
     clearStatus()
     if (!publicClient) {
@@ -315,6 +325,7 @@ function App() {
     void refresh()
   }, [isConfirmed, refetchRequest, loadRequests, resetCreateForm])
 
+  //Establish our variable to hold the contract ScanType struct
   const selectedRequest = hasSelectedRequest ? requestData : undefined
   const isSelectedRequestAccepted = Boolean(selectedRequest?.accepted)
   const requestor = selectedRequest?.requestor?.toLowerCase()
@@ -323,11 +334,13 @@ function App() {
     (item) => item.id.toString() === requestId,
   )
 
+  //Some variables to hide details of the request
   const isViewerRequestor = viewer && requestor && viewer === requestor
   const isViewerScanner = viewer && scanner && viewer === scanner
   const canSeePrivateDetails =
     Boolean(selectedRequest?.accepted) && (isViewerRequestor || isViewerScanner)
 
+  //Fetch the conversion of ETH to USD
   useEffect(() => {
     const loadPrice = async () => {
       try {
@@ -344,6 +357,7 @@ function App() {
     void loadPrice()
   }, [])
 
+  //Our ability to show USD and ETH for user
   function formatUsd(value: number) {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -477,6 +491,7 @@ function App() {
     })
   }
 
+  //With verification setting status to pending, need another button to fulfill it in testing mode
   const devFulfill = () => {
     if (!selectedRequest?.verificationRequestId) return
     clearStatus()

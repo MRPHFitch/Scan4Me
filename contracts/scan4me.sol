@@ -13,7 +13,7 @@ import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/dev/v1_X/
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/dev/v1_X/libraries/FunctionsRequest.sol";
 import {IFunctionsRouter} from "../lib/interfaces/IFunctionsRouter.sol";
 
-//TODO: Update payment to increase for multiple scans, Verification logic and code
+//TODO: Verification logic and code, Prevent scanner from unlimited uploads. Eventually say they suck and give it so someone else.
 
 contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     using SafeERC20 for IERC20;
@@ -22,6 +22,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     enum ScanType { PHOTO_360, LIDAR, STANDARD_PHOTO, DRONE_SCAN, VIDEO_CAPTURE }
     enum VerificationStatus { NotRequested, Pending, Approved, Rejected, Canceled }
 
+    //Set up our ScanRequest structure. Some things are only for dev mode, but we'll leave 'em in for now.
     struct ScanRequest {
         bool testMode;
         bool exists;
@@ -40,12 +41,13 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         uint256 lastRejected; // Timestamp of last rejection
         bool scannerPaid;   //Flag to prevent double withdraws
     }
-
+    //If scanner unresponsive, return the request to open timeline
     uint256 public constant REJECTED_TIMEOUT = 3 days;
     mapping(uint256 => ScanRequest) private requests;
     mapping(bytes32 => uint256) public verifRequestId;
     uint256 public nextRequestId;
-    //Check to possible adjust for fair payment
+
+    //Check to possibly adjust for fair payment, for now these are generous I think.
     function minPayment(ScanType scanType) public pure returns (uint256) {
         if (scanType == ScanType.PHOTO_360) return 0.045 ether;
         if (scanType == ScanType.LIDAR) return 0.05 ether;
@@ -93,6 +95,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
     }
     receive() external payable {}
 
+    //For now, this works, but if there's another YulException, can change this to not retrieve the whole ScanType and use the below functions instead
     function getRequest(uint256 requestID) public view returns(ScanRequest memory){
         return requests[requestID];
     }
@@ -142,7 +145,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
             r.scannerPaid
         );
     }
-
+    //Let's create that request and ensure that the requestor can't stiff a scanner with a lowball payment.
     function createRequest(
         string memory location,
         ScanType scanType,
@@ -174,8 +177,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         nextRequestId++;
         emit RequestCreated(nextRequestId, msg.sender, location, scanType, msg.value);
     }
-    //Work on allowing multiple people to accept a request, if they don't possess equipment
-    //If they want a photo and a drone scan, one can accept the photo, another can accept the drone
+    
     //Easiest would just be for only one scan type per request. Maybe see about allowing multiple scans per request.
     function acceptRequest(uint256 requestId) external nonReentrant {
         emit DebugLog("acceptRequest: entered", requestId);
@@ -212,6 +214,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         emit DebugLog("submitScan: completed", req.submissions);
     }
 
+    //Establish a helper for converting the enum to string for user understandability
     function scanTypeToString(ScanType scanType) internal pure returns (string memory) {
         if (scanType == ScanType.PHOTO_360) return "PHOTO_360";
         if (scanType == ScanType.LIDAR) return "LIDAR";
@@ -221,6 +224,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         revert("Unknown scan type");
     }
 
+    //Some dev needed tools for bypassing and testing
     bool public testingMode = true;
     uint256 public mockTime;
     function setTestingMode(bool _mode) external onlyOwner {
@@ -273,21 +277,19 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         FunctionsRequest.Request memory funcReq;
         funcReq._initializeRequestForInlineJavaScript(verificationSourceCode);
         funcReq._setArgs(args);
-
         bytes memory requestBytes = funcReq._encodeCBOR();
-
         bytes32 functionsRequestId = _sendRequest(
             requestBytes,
             chainlinkFunctionsSubscriptionId,
             uint32(300000),
             donId
         );
-
         req.verificationRequestId = functionsRequestId;
         verifRequestId[functionsRequestId] = requestId + 1;
         emit VerificationRequested(requestId, functionsRequestId);
     }
 
+    //Again, a dev function for the bypass
     function testFulfillRequest(bytes32 requestId, bytes memory response, bytes memory err) public {
         _fulfillRequest(requestId, response, err);
     }
@@ -303,15 +305,11 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
 
         uint256 marketRequestIdPlusOne = verifRequestId[requestId];
         require(marketRequestIdPlusOne != 0, "Unknown verification request");
-
         uint256 marketRequestId = marketRequestIdPlusOne - 1;
         ScanRequest storage req = requests[marketRequestId];
-
         require(req.verificationRequestId == requestId, "Invalid request ID");
         require(req.verificationStatus == VerificationStatus.Pending, "No verification pending");
-
         (bool approved) = abi.decode(response, (bool));
-
         if (approved) {
             req.verificationStatus = VerificationStatus.Approved;
             req.fulfilled = true;
@@ -321,10 +319,10 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
             req.fulfilled = false;
             req.lastRejected = _now();
         }
-
         emit ScanVerified(marketRequestId, req.scanner, approved);
-}
+    }
 
+    //Get the request to be available once again if no movement from the scanner
     function revertToOpen(uint256 requestId) external nonReentrant{
         ScanRequest storage req=requests[requestId];
         require(req.verificationStatus==VerificationStatus.Rejected, "Not rejected");
@@ -355,6 +353,7 @@ contract Scan4MeMarketplace is ReentrancyGuard, Ownable, FunctionsClient {
         emit FundsWithdrawn(requestId, req.scanner, scannerPayment);
     }
 
+    //If requestor made a mistake, or they no longer need the scan, they can cancel and get their money back
     function cancelRequest(uint256 requestId) external nonReentrant {
         ScanRequest storage req = requests[requestId];
         require(req.exists, "Request doesn't exist");
