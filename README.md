@@ -1,57 +1,57 @@
-# Sample Hardhat 3 Beta Project (`node:test` and `viem`)
-
-This project showcases a Hardhat 3 Beta project using the native Node.js test runner (`node:test`) and the `viem` library for Ethereum interactions.
-
-To learn more about the Hardhat 3 Beta, please visit the [Getting Started guide](https://hardhat.org/docs/getting-started#getting-started-with-hardhat-3). To share your feedback, join our [Hardhat 3 Beta](https://hardhat.org/hardhat3-beta-telegram-group) Telegram group or [open an issue](https://github.com/NomicFoundation/hardhat/issues/new) in our GitHub issue tracker.
+# Scan4Me
 
 ## Project Overview
+The project allows for a requestor to submit a request for a scan, and allow anyone in the world to accept that request. Once accepted, the scanner can upload their scan file and request for verification. After the scan has been verified for correct location and file type, the request is marked as fulfilled and the scanner and withdraw their money from the contract.  
 
-This example project includes:
+If the creator of the request determines that they made a mistake, they can cancel or delete their request before the request is accepted. After the request is accepted, they cannot do so.  
 
-- A simple Hardhat configuration file.
-- Foundry-compatible Solidity unit tests.
-- TypeScript integration tests using [`node:test`](nodejs.org/api/test.html), the new Node.js native test runner, and [`viem`](https://viem.sh/).
-- Examples demonstrating how to connect to different types of networks, including locally simulating OP mainnet.
+If the request for verification returns a rejection, the scanner has 3 days to resubmit a scan. If at the end of 3 days, there has been no response from the scanner, the request can be reverted to an open status and anyone can accept it at that time, or the requestor can cancel the request.
 
 ## Usage
+
+I prefer yarn to npm or npx, so I have some scripts set up for running the code using yarn.
 
 ### Running Tests
 
 To run all the tests in the project, execute the following command:
 
 ```shell
-npx hardhat test
-```
-
-You can also selectively run the Solidity or `node:test` tests:
-
-```shell
-npx hardhat test solidity
-npx hardhat test nodejs
+yarn test
 ```
 
 ### Make a deployment to Sepolia
 
-This project includes an example Ignition module to deploy the contract. You can deploy this module to a locally simulated chain or to Sepolia.
-
-To run the deployment to a local chain:
+There were two contracts created, one with the hope of adjusting the already deployed one in order to retrieve some tokens from the contract, and the main deployment. As such there are two deployment script shortcuts I created. Both are specified to work on the Sepolia testnet.
 
 ```shell
-npx hardhat ignition deploy ignition/modules/Counter.ts
+yarn deploy
+yarn update
 ```
 
-To run the deployment to Sepolia, you need an account with funds to send the transaction. The provided Hardhat configuration includes a Configuration Variable called `SEPOLIA_PRIVATE_KEY`, which you can use to set the private key of the account you want to use.
+Before running, a wallet's private key will be needed, along with Sepolia's RPC URL. I used alchemy to retrieve the URL.  
+You will also need the functions router and DON ID. Both are publicly available from Chainklink here:
 
-You can set the `SEPOLIA_PRIVATE_KEY` variable using the `hardhat-keystore` plugin or by setting it as an environment variable.
+https://docs.chain.link/chainlink-functions/supported-networks
 
-To set the `SEPOLIA_PRIVATE_KEY` config variable using `hardhat-keystore`:
+### Other shortcuts
+I also established a shortcut to start up a hardhat node for original testing.
 
 ```shell
-npx hardhat keystore set SEPOLIA_PRIVATE_KEY
+yarn on
 ```
 
-After setting the variable, you can run the deployment with the Sepolia network:
+With the excessive amount of compiling, I also created:
 
 ```shell
-npx hardhat ignition deploy --network sepolia ignition/modules/Counter.ts
+yarn compile
 ```
+
+Lastly, I created one last shortcut in case I needed to clean up and rebuild everything. I mostly did this because my brain wanted to keep on typing clear instead of clean and it was driving me nuts.
+
+```shell
+yarn clean
+```
+
+### Structure
+
+You will find all front end material inside of the frontend directory, and the main contract in the contracts directory. The lib directory can be ignored as it was a way to import chainlink and openzeppelin files before just including them in the dependencies. Both contract deployment files are found in the scripts directory. Sometimes, the node_modules directory has a problem because the viem tsconfig.json file added in a reliance upon a base.json file that doesn't exist. Just go in and delete the line.
